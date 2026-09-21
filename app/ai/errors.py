@@ -32,13 +32,24 @@ class ModelRateLimited(ModelError):
 
 
 class ModelUnavailable(ModelError):
+    """Provider unreachable or failing. `retryable` is False for errors a retry cannot fix
+    (401/403/404, i.e. configuration), so they never burn the turn's call budget."""
+
     code = "unavailable"
+
+    def __init__(self, message: str = "", *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class StructuredOutputError(ModelError):
     """Provider output could not be parsed into the requested Pydantic model. Never usable."""
 
     code = "structured_output_invalid"
+
+    def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.fields = fields  # locations only, never model output (repair note uses these)
 
 
 class EmbeddingDimensionError(ModelError):

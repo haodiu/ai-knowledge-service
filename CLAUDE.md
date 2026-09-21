@@ -89,7 +89,9 @@ set-membership check.
    (`text_snapshot`, `metadata_snapshot`) so historical citations keep
    working after version cleanup (Plan §12.7) deletes the underlying rows.
    **Do not "fix" this by adding a foreign key** — that would let cleanup
-   cascade-delete citation history. (Plan §5.4)
+   cascade-delete citation history. (Plan §5.4) Guarded by
+   `tests/integration/test_turn_sources.py` (introspects the constraints;
+   snapshots survive deleting the document and activating a newer version).
 7. **Bounded everything in the online graph — no unbounded loops.**
    `MAX_RETRIEVAL_ATTEMPTS=2`, `MAX_TOOL_CALLS=1`,
    `MAX_GENERATIVE_LLM_CALLS=4`, `GRAPH_TIMEOUT_SECONDS=30` (Plan §8.4).
@@ -108,11 +110,23 @@ set-membership check.
    >    gets one `model_calls` row. (`google-genai` does not retry by default;
    >    `attempts=1` is set explicitly and no test can prove it — the openai
    >    one is the mutation-checked guard.)
-   > 2. A retry is an *orchestration* decision (Week 4 graph): at most one
-   >    (Plan §11.7), counted in `MAX_GENERATIVE_LLM_CALLS`, and only if
-   >    `retry_after` fits in the remaining `GRAPH_TIMEOUT_SECONDS`; otherwise
-   >    `temporarily_unavailable` immediately — never sleep past the budget.
-   > 3. The one exception is ingestion: `SyncEmbedder` backs off (bounded: 5
+   > 2. A retry is an *orchestration* decision, made in exactly one place
+   >    (`app/ai/roles.py::_call`): every provider call first takes a unit from
+   >    the turn's `TurnBudget` (`MAX_GENERATIVE_LLM_CALLS=4`; the acquire
+   >    raises *before* any request), and a logical call gets at most ONE extra
+   >    attempt — a repair after invalid output or a retry after a transient
+   >    error — only if the pool has a unit left, `retry_after ≤ 10 s`, and the
+   >    wait plus a minimal call fits in the remaining `GRAPH_TIMEOUT_SECONDS`;
+   >    otherwise fail immediately — never sleep past the budget. Non-retryable
+   >    provider errors (401/404, `ModelUnavailable.retryable=False`) never
+   >    burn a unit. Every attempt writes one `model_calls` row (`repair` for
+   >    the re-ask).
+   > 3. The graph also runs under `asyncio.timeout(GRAPH_TIMEOUT_SECONDS)`
+   >    and LangGraph's recursion limit as a last-resort backstop; the routing
+   >    bounds (`MAX_RETRIEVAL_ATTEMPTS`, one rewrite) bind long before it.
+   >    The fuzz test `test_no_failure_sequence_can_exceed_the_hard_limits`
+   >    (300 random failure sequences) asserts ≤4 calls and ≤2 retrievals.
+   > 4. The one exception is ingestion: `SyncEmbedder` backs off (bounded: 5
    >    attempts, 30 s cap) because ingestion is idempotent (#10) and outside
    >    the online graph. Never use it on the online path.
    >
@@ -183,6 +197,12 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 
 - Backend: **FastAPI** (async). Online path never touches Celery/RabbitMQ —
   adding a broker to a request-response chat turn only adds latency.
+- LangChain: **LangGraph is required, and it pulls `langchain-core` and
+  `langsmith` in transitively — that is unavoidable and allowed. Our own code
+  never imports them** (`tests/unit/test_dependency_guards.py` scans `app/`;
+  only `graph/workflow.py` may import `langgraph`). LangSmith tracing would
+  ship prompts/evidence off-box, so `app/graph/__init__.py` forces it off by
+  default.
 - Orchestration: **LangGraph** for the online path only (bounded state
   machine — routing, evidence grading, one rewrite, validation gate). Never
   used for the offline/ingestion path (that's a data pipeline, not a
@@ -236,7 +256,7 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 # test (unit):   pytest -q tests/unit          # no broker/DB needed
 # test (e2e):    pytest -q tests/e2e            # full docker-compose stack (Week 8; dir not created yet)
 # ingest (CLI):  python -m app.ingestion.cli ingest ./documents [--embeddings gemini]   # default: fake embedder
-# ask (CLI):     python -m app.ai.cli ask "question" --tier general [--fake]   # Week 3 sequential flow, not the graph
+# ask (CLI):     python -m app.ai.cli ask "question" --tier general [--fake]   # runs the LangGraph workflow
 # test (live):   GEMINI_API_KEY=... pytest -q -m live tests/live   # real API; skipped without a key; sparing on free tier
 # cleanup:       python -m app.ingestion.cli cleanup-versions --keep-last 2 --older-than-days 30   # Week 5
 ```

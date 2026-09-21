@@ -1,4 +1,4 @@
-"""Week 3 demo CLI: plan -> retrieval -> grade -> generate -> citation-validated answer.
+"""Demo CLI: one question through the online LangGraph workflow (Plan §8), citation-validated.
 
     python -m app.ai.cli ask "What is the refund window?" --tier general --fake
     python -m app.ai.cli ask "What is the refund window?" --tier general      # needs GEMINI_API_KEY
@@ -10,25 +10,23 @@ i.e. fail closed). It never comes from the model. Exit codes: 0 answered/clarifi
 import argparse
 import asyncio
 import sys
-import time
 from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.ai.errors import ConfigurationError, PromptError
-from app.ai.pipeline import TurnResult, run_turn
 from app.ai.prompts.loader import load_prompts
-from app.ai.recorder import SqlModelCallRecorder
 from app.ai.registry import build_fake_registry, build_registry
-from app.auth.policies import allowed_tiers
+from app.auth.policies import AuthorizationContext
 from app.db import repositories
 from app.db.session import create_engine
+from app.graph.result import TurnResult
+from app.graph.runner import run_turn
+from app.graph.runtime import Phase
 from app.ingestion.fake_embedder import FAKE_EMBEDDING_MODEL
-from app.retrieval.hybrid_search import hybrid_search
-from app.retrieval.schemas import Evidence, Tier
+from app.retrieval.schemas import Tier
 from app.settings import get_settings
 
-MAX_RETRIEVED_CHUNKS = 8  # Plan §8.4
 _EXIT = {
     "answered": 0, "clarification": 0, "insufficient_evidence": 1, "blocked": 1,
     "temporarily_unavailable": 3,
@@ -37,6 +35,7 @@ _EXIT = {
 
 def _print(result: TurnResult) -> None:
     print(f"status: {result.status} ({result.detail})")
+    print(f"retrieval attempts: {result.retrieval_attempts}")
     if result.plan:
         print(f"plan: intent={result.plan.intent} query={result.plan.retrieval_query!r}")
     if result.proposed_tool:
@@ -68,34 +67,20 @@ async def _ask(question: str, *, tier: Tier, fake: bool) -> int:
     except (ConfigurationError, PromptError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    embedding_model = FAKE_EMBEDDING_MODEL if fake else settings.embedding_model
-    tiers = allowed_tiers(tier)
+
+    async def show_phase(phase: Phase) -> None:  # phase events only; never any answer text
+        print(f"[{phase}]", file=sys.stderr)
 
     engine: AsyncEngine = create_engine(settings)
-    started = time.perf_counter()
     turn_id = None
     try:
         turn_id = await repositories.create_turn(engine, user_id="cli", question=question)
-
-        async def retrieve(query: str, embedding: Sequence[float]) -> Sequence[Evidence]:
-            return await hybrid_search(
-                engine, query_text=query, query_embedding=embedding,
-                allowed_tiers=tiers, limit=MAX_RETRIEVED_CHUNKS,
-            )
-
         result = await run_turn(
-            question=question, models=models, prompts=prompts,
-            recorder=SqlModelCallRecorder(engine, turn_id), retrieve=retrieve,
-            embedding_model=embedding_model, timeout_seconds=settings.chat_timeout_seconds,
-        )
-        await repositories.finish_turn(
-            engine, turn_id, graph_status=result.status, answer=result.answer,
-            sources=[
-                {"document_version_id": str(c.document_version_id), "chunk_id": str(c.chunk_id)}
-                for c in result.citations
-            ],
-            retrieval_attempts=result.retrieval_attempts,
-            latency_ms=int((time.perf_counter() - started) * 1000),
+            engine=engine, turn_id=turn_id, question=question,
+            auth=AuthorizationContext(user_id="cli", tier=tier),
+            models=models, prompts=prompts,
+            embedding_model=FAKE_EMBEDDING_MODEL if fake else settings.embedding_model,
+            chat_timeout_seconds=settings.chat_timeout_seconds, on_phase=show_phase,
         )
         _print(result)
         return _EXIT[result.status]
@@ -103,7 +88,7 @@ async def _ask(question: str, *, tier: Tier, fake: bool) -> int:
         if turn_id is not None:
             await repositories.finish_turn(
                 engine, turn_id, graph_status="error", answer=None, sources=[],
-                retrieval_attempts=0, latency_ms=int((time.perf_counter() - started) * 1000),
+                retrieval_attempts=0, latency_ms=0,
             )
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 4

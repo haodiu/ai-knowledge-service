@@ -19,6 +19,7 @@ dependencies = [
     "redis==8.1.0",
     "openai==3.16.2",  # generic client for OpenAI-compatible endpoints (Gemini today), not OpenAI-only
     "google-genai==2.24.0",  # embeddings only (gemini-embedding-001)
+    "langgraph==1.2.11",  # online path only; pulls langchain-core transitively (never import it)
 ]
 
 [project.optional-dependencies]

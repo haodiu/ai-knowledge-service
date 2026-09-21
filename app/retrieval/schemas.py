@@ -1,6 +1,7 @@
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 class Tier(StrEnum):
@@ -22,3 +23,21 @@ class Evidence:
     chunk_index: int
     text: str
     score: float
+
+
+@dataclass(frozen=True)
+class SourceSnapshot:
+    """Immutable citation snapshot saved with a turn (Plan §5.4).
+
+    Self-contained on purpose: it keeps working after the version/chunk it came from has been
+    cleaned up, so nothing here may ever become a foreign key (CLAUDE.md invariant #6).
+    """
+
+    source_id: uuid.UUID
+    document_id: uuid.UUID
+    document_version_id: uuid.UUID
+    chunk_id: uuid.UUID
+    document_title: str
+    version_no: int
+    text_snapshot: str
+    metadata_snapshot: dict[str, Any] = field(default_factory=dict)

@@ -90,9 +90,12 @@ class OpenAICompatibleChatClient:
         except openai.APIConnectionError:
             raise ModelUnavailable(f"{self.provider} connection failed") from None
         except openai.APIStatusError as exc:
-            raise ModelUnavailable(f"{self.provider} returned HTTP {exc.status_code}") from None
+            raise ModelUnavailable(
+                f"{self.provider} returned HTTP {exc.status_code}",
+                retryable=exc.status_code >= 500 or exc.status_code == 408,
+            ) from None
         except openai.OpenAIError:
-            raise ModelUnavailable(f"{self.provider} client error") from None
+            raise ModelUnavailable(f"{self.provider} client error", retryable=False) from None
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         if not completion.choices:

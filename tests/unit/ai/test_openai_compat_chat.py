@@ -142,3 +142,21 @@ async def test_api_key_never_appears_in_error_messages() -> None:
     with pytest.raises(ModelUnavailable) as exc:
         await _call(srv.client())
     assert "test-key" not in str(exc.value)
+
+
+@pytest.mark.parametrize(("status", "retryable"),
+                         [(500, True), (503, True), (408, True), (401, False), (403, False),
+                          (404, False), (400, False)])
+async def test_only_server_side_failures_are_marked_retryable(status: int, retryable: bool) -> None:
+    """A 401/404 is a configuration error: retrying it would only burn the turn's call budget."""
+    srv = Server(status=status, body={"error": {"message": "x"}})
+    with pytest.raises(ModelUnavailable) as exc:
+        await _call(srv.client())
+    assert exc.value.retryable is retryable
+
+
+async def test_connection_failures_are_retryable() -> None:
+    srv = Server(raises=httpx2.ConnectError("down"))
+    with pytest.raises(ModelUnavailable) as exc:
+        await _call(srv.client())
+    assert exc.value.retryable is True

@@ -1,4 +1,4 @@
-"""conversations / turns / model_calls exactly as Plan §5.4 (turn_sources is Week 4).
+"""conversations / turns / model_calls exactly as Plan §5.4 (turn_sources: test_turn_sources.py).
 
 model_calls is operational metadata only: the table must have nowhere to put a raw prompt or a
 raw response (Plan §5.4, §17, DoD).
@@ -74,8 +74,3 @@ def test_model_calls_requires_an_existing_turn(db_engine: Engine) -> None:
     with pytest.raises(IntegrityError), db_engine.begin() as conn:
         _call(conn, "00000000-0000-0000-0000-000000000000")
 
-
-def test_turn_sources_still_does_not_exist_yet(db_engine: Engine) -> None:
-    """Week 4 owns it (and invariant #6: it must never get an FK to versions/chunks)."""
-    with db_engine.connect() as conn:
-        assert conn.execute(text("SELECT to_regclass('turn_sources')")).scalar_one() is None

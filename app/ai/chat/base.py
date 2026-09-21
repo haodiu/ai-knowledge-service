@@ -40,5 +40,6 @@ def parse_structured[T: BaseModel](raw: str, response_model: type[T]) -> T:
         where = sorted({".".join(str(p) for p in err["loc"]) or "<root>" for err in exc.errors()})
         raise StructuredOutputError(
             f"{response_model.__name__} rejected model output ({exc.error_count()} error(s) "
-            f"at: {', '.join(where)})"
+            f"at: {', '.join(where)})",
+            fields=tuple(where),
         ) from None

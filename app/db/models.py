@@ -200,6 +200,37 @@ class Turn(Base):
     )
 
 
+class TurnSource(Base):
+    """Immutable citation snapshot. document_id / document_version_id / chunk_id are DELIBERATELY
+    not foreign keys: version cleanup (Plan §12.7) must never cascade into citation history."""
+
+    __tablename__ = "turn_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "turn_id", "document_version_id", "chunk_id",
+            name="uq_turn_sources_turn_id_document_version_id_chunk_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    turn_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("turns.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_title: Mapped[str] = mapped_column(Text, nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=_EMPTY_JSON
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+
+
 class ModelCall(Base):
     """Metadata of one LLM call. No column can hold a prompt or a response (Plan §5.4)."""
 

@@ -19,3 +19,27 @@ def make_evidence(n: int = 2, *, text_prefix: str = "chunk") -> list[Evidence]:
         )
         for i in range(n)
     ]
+
+
+class FakeClock:
+    """Deterministic time for budget/retry tests: `sleep` advances `now` instead of waiting."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def make_budget(clock: FakeClock, *, calls: int = 4, timeout: float = 30.0):  # type: ignore[no-untyped-def]
+    from app.ai.budget import TurnBudget
+
+    return TurnBudget.start(
+        timeout_seconds=timeout, max_generative_calls=calls, max_tool_calls=1,
+        clock=clock, sleep=clock.sleep,
+    )

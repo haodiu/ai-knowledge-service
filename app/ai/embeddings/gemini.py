@@ -94,7 +94,10 @@ class GeminiEmbeddingClient:
                     "gemini embedding rate limited (HTTP 429)",
                     retry_after_seconds=_retry_delay(exc),
                 ) from None
-            raise ModelUnavailable(f"gemini embedding returned HTTP {exc.code}") from None
+            raise ModelUnavailable(
+                f"gemini embedding returned HTTP {exc.code}",
+                retryable=exc.code >= 500 or exc.code == 408,
+            ) from None
         except _TIMEOUTS:
             raise ModelTimeout("gemini embedding call timed out") from None
         except _TRANSPORT:

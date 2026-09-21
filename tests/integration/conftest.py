@@ -76,7 +76,10 @@ def db_engine(test_db_url: str) -> Iterator[Engine]:
     engine = create_engine(test_db_url)
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE documents, document_versions, chunks, conversations, turns, model_calls")
+            text(
+                "TRUNCATE documents, document_versions, chunks, conversations, turns, "
+                "model_calls, turn_sources"
+            )
         )
         conn.execute(text("UPDATE knowledge_base_state SET knowledge_version = 0"))
     yield engine

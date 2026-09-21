@@ -4,8 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-# Subset of model_calls.purpose (Plan §5.4); 'repair' is reserved for Week 4's bounded repair.
-Purpose = Literal["plan", "grade", "answer"]
+# Same values as model_calls.purpose (Plan §5.4). "repair" = the one re-ask after invalid output.
+Purpose = Literal["plan", "grade", "answer", "repair"]
 EmbeddingKind = Literal["document", "query"]
 
 

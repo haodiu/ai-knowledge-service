@@ -7,6 +7,7 @@ so these tests cannot clobber dev data and do not race test_migrations.py.
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -17,7 +18,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.db.models import EMBEDDING_DIM
-from app.settings import get_settings
+from tests.db_safety import alembic_env
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -26,8 +27,10 @@ def _render(url: Any) -> str:
     return url.render_as_string(hide_password=False)  # type: ignore[no-any-return]
 
 
-@pytest.fixture(scope="session")
-def test_db_url() -> Iterator[str]:
+@contextmanager
+def _throwaway_database() -> Iterator[str]:
+    """Create an empty `chatbot_test_<hex>` database on the server DATABASE_URL points at, and
+    drop it afterwards. The database named in DATABASE_URL itself is never touched."""
     if not DATABASE_URL:
         pytest.skip("DATABASE_URL not set")
     base = make_url(DATABASE_URL)
@@ -35,39 +38,33 @@ def test_db_url() -> Iterator[str]:
     admin = create_engine(_render(base.set(database="postgres")), isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{name}"'))
-    test_url = _render(base.set(database=name))
-
     try:
-        _migrate(test_url)
-        yield test_url
+        yield _render(base.set(database=name))
     finally:
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
 
 
-def _migrate(url: str) -> None:
-    """Run `alembic upgrade head` against `url`, then put the environment back exactly as found.
+@pytest.fixture(scope="session")
+def test_db_url() -> Iterator[str]:
+    with _throwaway_database() as url:
+        _migrate(url)
+        yield url
 
-    migrations/env.py resolves the URL through get_settings(), so the override is unavoidable, but
-    it must NOT outlive this call: test_migrations.py also drives Alembic through env.py and would
-    otherwise migrate (and downgrade) this temp database instead of the one it targets.
-    """
-    keys = ("DATABASE_URL", "REDIS_URL", "RABBITMQ_URL")
-    saved = {k: os.environ.get(k) for k in keys}
-    os.environ["DATABASE_URL"] = url
-    os.environ.setdefault("REDIS_URL", "redis://localhost:1/0")
-    os.environ.setdefault("RABBITMQ_URL", "amqp://u:p@localhost:1//")
-    get_settings.cache_clear()
-    try:
+
+@pytest.fixture
+def migration_db_url() -> Iterator[str]:
+    """A fresh, EMPTY throwaway database for tests that run migrations themselves (including
+    downgrades). Function-scoped so each such test starts from nothing."""
+    with _throwaway_database() as url:
+        yield url
+
+
+def _migrate(url: str) -> None:
+    """`alembic upgrade head` against `url`; the environment is restored exactly as found."""
+    with alembic_env(url):
         command.upgrade(Config("alembic.ini"), "head")
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        get_settings.cache_clear()
 
 
 @pytest.fixture

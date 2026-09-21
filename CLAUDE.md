@@ -94,6 +94,35 @@ set-membership check.
    `MAX_RETRIEVAL_ATTEMPTS=2`, `MAX_TOOL_CALLS=1`,
    `MAX_GENERATIVE_LLM_CALLS=4`, `GRAPH_TIMEOUT_SECONDS=30` (Plan §8.4).
    These are hard limits, not defaults to tune away.
+
+   > **`max_retries=0` on every provider client is required, not extra
+   > caution.** The `openai` SDK defaults to `max_retries=2` and silently
+   > re-sends on 429/5xx/timeout (verified Week 3: one logical call became 3
+   > requests, and a `Retry-After: 7` made it wait 14 s). Each hidden resend
+   > is a real LLM call that `model_calls` never records and
+   > `MAX_GENERATIVE_LLM_CALLS` never counts, and it eats the graph timeout —
+   > so the invariant is broken while every counter says it holds. Rules:
+   > 1. Adapters (`app/ai/chat/openai_compat.py`,
+   >    `app/ai/embeddings/gemini.py`) never retry. 429 →
+   >    `ModelRateLimited(retry_after_seconds)`; every attempt, failed or not,
+   >    gets one `model_calls` row. (`google-genai` does not retry by default;
+   >    `attempts=1` is set explicitly and no test can prove it — the openai
+   >    one is the mutation-checked guard.)
+   > 2. A retry is an *orchestration* decision (Week 4 graph): at most one
+   >    (Plan §11.7), counted in `MAX_GENERATIVE_LLM_CALLS`, and only if
+   >    `retry_after` fits in the remaining `GRAPH_TIMEOUT_SECONDS`; otherwise
+   >    `temporarily_unavailable` immediately — never sleep past the budget.
+   > 3. The one exception is ingestion: `SyncEmbedder` backs off (bounded: 5
+   >    attempts, 30 s cap) because ingestion is idempotent (#10) and outside
+   >    the online graph. Never use it on the online path.
+   >
+   > Guards: `test_429_is_rate_limited_..._exactly_one_request` and the
+   > 5xx/timeout/connection tests in `tests/unit/ai/test_openai_compat_chat.py`
+   > (mutation-checked: `max_retries=2` makes them fail). **Any new provider
+   > adapter must ship the same "exactly one request on 429/5xx/timeout"
+   > test.** Free-tier 429s are an operational nuisance, not a reason to add
+   > retries or a pacer; add a client-side pacer only after 429s are
+   > actually observed in a real run.
 8. **SSE never streams an unvalidated draft.** Only phase-status events
    (`planning`, `retrieving`, `grading`, `generating`) go out before
    validation; the answer event is sent once, after citation validation
@@ -167,7 +196,18 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 - Model access: two separate protocols, **`ChatModelClient`** and
   **`EmbeddingClient`** (Plan §11.3) — never merge them, they have
   different lifecycles/batching/failure modes. No LangChain Core; adapters
-  sit directly on the native provider SDK.
+  sit directly on the provider SDK. Chat is ONE adapter,
+  `OpenAICompatibleChatClient`, over any OpenAI-compatible endpoint
+  (Gemini today via `openai` SDK; a new provider is a `ModelRegistry`
+  entry, not new adapter code). Embeddings: `GeminiEmbeddingClient`
+  (`google-genai`, `gemini-embedding-001`, 1536 dims, L2-normalised by us).
+  `EmbeddingClient.embed` takes `kind="document"|"query"` (deliberate
+  deviation from Plan §11.3, noted there). Model names are pinned settings;
+  `*-latest` aliases are rejected on purpose (reproducible demos).
+- Prompts: `app/ai/prompts/vN/<role>.md`, one directory per released
+  version, never edited in place (wording change ⇒ new `vN/`).
+  `PROMPT_VERSION` selects it and `model_calls.prompt_version` records it.
+  Evidence goes in nonce-delimited blocks; titles are JSON-encoded.
 - Streaming: **SSE**, phase events only until validated (invariant 8).
 - Auth: JWT minted by the Spring Boot host, short-lived, flat `tier` claim
   (no `tenant_id` — single tenant). Verify `iss`/`aud`/`exp`/`nbf`; never
@@ -195,7 +235,9 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 # test:          pytest -q   # integration tests need DATABASE_URL (compose postgres is on 127.0.0.1:5434)
 # test (unit):   pytest -q tests/unit          # no broker/DB needed
 # test (e2e):    pytest -q tests/e2e            # full docker-compose stack (Week 8; dir not created yet)
-# ingest (CLI):  python -m app.ingestion.cli ingest ./documents        # not implemented until Week 2/5
+# ingest (CLI):  python -m app.ingestion.cli ingest ./documents [--embeddings gemini]   # default: fake embedder
+# ask (CLI):     python -m app.ai.cli ask "question" --tier general [--fake]   # Week 3 sequential flow, not the graph
+# test (live):   GEMINI_API_KEY=... pytest -q -m live tests/live   # real API; skipped without a key; sparing on free tier
 # cleanup:       python -m app.ingestion.cli cleanup-versions --keep-last 2 --older-than-days 30   # Week 5
 ```
 

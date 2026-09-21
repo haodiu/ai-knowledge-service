@@ -17,6 +17,8 @@ dependencies = [
     "pgvector==0.5.0",
     "celery==5.6.3",
     "redis==8.1.0",
+    "openai==3.16.2",  # generic client for OpenAI-compatible endpoints (Gemini today), not OpenAI-only
+    "google-genai==2.24.0",  # embeddings only (gemini-embedding-001)
 ]
 
 [project.optional-dependencies]
@@ -31,11 +33,15 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+app = ["ai/prompts/v*/*.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: needs a running PostgreSQL (docker compose up -d postgres)",
+    "live: calls the real Gemini API; needs GEMINI_API_KEY (skipped otherwise)",
 ]
 
 [tool.ruff]

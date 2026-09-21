@@ -170,3 +170,58 @@ class KnowledgeBaseState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_NOW
     )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+
+
+class Turn(Base):
+    __tablename__ = "turns"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str | None] = mapped_column(Text)
+    sources_json: Mapped[Any | None] = mapped_column(JSONB)
+    graph_status: Mapped[str] = mapped_column(Text, nullable=False)
+    retrieval_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+
+
+class ModelCall(Base):
+    """Metadata of one LLM call. No column can hold a prompt or a response (Plan §5.4)."""
+
+    __tablename__ = "model_calls"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('plan', 'grade', 'answer', 'repair')", name="purpose"),
+        CheckConstraint("status IN ('ok', 'error')", name="status"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    turn_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("turns.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )

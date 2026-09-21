@@ -75,7 +75,9 @@ def db_engine(test_db_url: str) -> Iterator[Engine]:
     """Sync engine on the migrated temp DB, reset to the just-migrated state for every test."""
     engine = create_engine(test_db_url)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE documents, document_versions, chunks"))
+        conn.execute(
+            text("TRUNCATE documents, document_versions, chunks, conversations, turns, model_calls")
+        )
         conn.execute(text("UPDATE knowledge_base_state SET knowledge_version = 0"))
     yield engine
     engine.dispose()

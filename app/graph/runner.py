@@ -26,7 +26,7 @@ from app.graph.limits import (
     MAX_RETRIEVED_CHUNKS,
     MAX_TOOL_CALLS,
 )
-from app.graph.result import TurnResult, TurnStatus
+from app.graph.result import KNOWN_DETAILS, TurnResult, TurnStatus
 from app.graph.runtime import GraphRuntimeContext, PhaseCallback, Retriever
 from app.graph.state import RAGState
 from app.graph.workflow import GraphLoopError, run_graph
@@ -61,6 +61,13 @@ async def execute_turn(
         return _failed("temporarily_unavailable", "internal_error")
 
     status: TurnStatus = state.get("status", "blocked")  # type: ignore[assignment]
+    detail = state.get("detail", "")
+    if detail not in KNOWN_DETAILS or (status == "answered") != (detail == "ok"):
+        # an outcome nobody named (or an "answered" without the validated-answer detail): fail
+        # closed and say so loudly instead of returning whatever the state happens to hold
+        log.error("turn %s ended in an unnamed state: status=%r detail=%r",
+                  ctx.request_id, status, detail)
+        return _failed("blocked", "unexpected_state")
     answered = status == "answered"
     return TurnResult(
         status=status,
@@ -73,7 +80,7 @@ async def execute_turn(
         proposed_tool=state.get("proposed_tool"),
         tool_executed=False,
         retry_after_seconds=state.get("retry_after_seconds"),
-        detail=state.get("detail", ""),
+        detail=detail,
         retrieval_attempts=state.get("retrieval_attempts", 0),
         source_snapshots=tuple(state.get("source_snapshots", ())) if answered else (),
     )

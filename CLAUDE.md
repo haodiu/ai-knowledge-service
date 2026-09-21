@@ -269,6 +269,25 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 anything touching: retrieval version/tier filtering, citation validation,
 tool authorization, or the graph's bounded-loop limits.
 
+**Tests must never be able to destroy a real database.** Integration tests
+create their own `chatbot_test_<hex>` database on the server `DATABASE_URL`
+points at and never touch the database named in it. Anything destructive
+(an `alembic downgrade`) must go through `tests/db_safety.py::alembic_env(
+url, destructive=True)`, which **refuses any database whose name is not
+`chatbot_test_*`/`chatbot_scratch_*`** — checked on the argument and on the
+URL alembic will really resolve, before the body runs. Fail closed like an
+authz check; never loosen the pattern to make a test pass. (A migration test
+once ran `downgrade base` on the dev database and wiped it.)
+
+**Every turn outcome is named.** `TurnResult.detail` is always one of
+`KNOWN_DETAILS` in `app/graph/result.py`; a failed stage ends as
+`blocked/structured_output_invalid` or `temporarily_unavailable/<error code>`,
+and anything unnamed becomes `blocked/unexpected_state` (logged), never a
+silent branch. `BUG_DETAILS` (`internal_error`, `unexpected_state`,
+`graph_recursion_limit`) must never come from a legitimate failure —
+`tests/unit/graph/test_failure_matrix.py` and the fuzz test assert it. A new
+`ModelError` code must be added to `KNOWN_DETAILS` (a test enforces it).
+
 Required tests, each release-blocking:
 - Retrieval only returns chunks from `documents.active_version_id`, proven
   with active/building/superseded versions coexisting in the same test.

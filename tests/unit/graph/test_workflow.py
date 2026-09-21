@@ -21,6 +21,7 @@ from app.ai.errors import (
 )
 from app.ai.schemas import AnswerDraft, CitationRef, EvidenceGrade, QueryPlan
 from app.ai.types import ModelMessage, ModelResponse, Usage
+from app.graph.result import BUG_DETAILS, KNOWN_DETAILS
 from app.retrieval.schemas import Evidence
 from tests.unit.ai.helpers import make_evidence
 from tests.unit.graph.harness import Harness
@@ -352,7 +353,7 @@ async def test_no_failure_sequence_can_exceed_the_hard_limits(seed: int) -> None
     assert result.status in {"answered", "clarification", "insufficient_evidence",
                              "temporarily_unavailable", "blocked"}
     # a graph bug must not hide behind a legitimate-looking fallback status
-    assert result.detail not in {"internal_error", "unexpected_state", "graph_recursion_limit"}
+    assert result.detail in KNOWN_DETAILS and result.detail not in BUG_DETAILS
     if result.status != "answered":
         assert result.answer is None and result.citations == () and LEAK not in repr(result)
     else:

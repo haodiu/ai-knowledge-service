@@ -65,6 +65,8 @@ def route_after_grade(state: RAGState) -> Literal["generate", "rewrite", "fallba
 
 
 def route_after_generate(state: RAGState) -> Literal["validate", "fallback"]:
+    # A failed generation has no draft: validating nothing used to raise KeyError (a graph bug that
+    # only showed up as a generic "internal error"). It must go to the fallback like any failure.
     if state.get("error") or state.get("draft") is None:
         return "fallback"
     return "validate"
@@ -88,7 +90,15 @@ class FallbackOutcome:
 
 
 def fallback_outcome(state: RAGState) -> FallbackOutcome:
-    """Why the turn ended without a validated answer. Deterministic; never consults a model."""
+    """Why the turn ended without a validated answer. Deterministic; never consults a model.
+
+    A stage that FAILED (plan, embedding/retrieval, grade or generate) is always reported through
+    `state["error"]`: `blocked` for invalid output, `temporarily_unavailable` for everything else,
+    with the normalised error code as the detail (full table in `app/graph/result.py`). The
+    generate stage is no exception — a failed generation leaves no draft, `route_after_generate`
+    sends it here, and it ends as e.g. temporarily_unavailable / unavailable, never as an
+    unnamed or "internal" outcome.
+    """
     error = state.get("error")
     if error is not None:
         status: TurnStatus = "blocked" if error.kind == "blocked" else "temporarily_unavailable"

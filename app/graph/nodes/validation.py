@@ -4,16 +4,20 @@
 (invariants #3, #8). Snapshots are built here from the evidence; the runner persists them together
 with the turn, atomically.
 """
+import logging
 import uuid
 from typing import Any
 
 from app.ai.citations import validate_citations
 from app.ai.schemas import CitationRef
 from app.graph.nodes.evidence import evidence_key
+from app.graph.result import BUG_DETAILS
 from app.graph.routing import fallback_outcome
 from app.graph.runtime import GraphRuntimeContext
 from app.graph.state import RAGState
 from app.retrieval.schemas import SourceSnapshot
+
+log = logging.getLogger(__name__)
 
 
 async def validate_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, Any]:
@@ -51,6 +55,8 @@ async def validate_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, 
 
 async def fallback_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, Any]:
     outcome = fallback_outcome(state)
+    if outcome.detail in BUG_DETAILS:
+        log.error("turn %s reached an impossible state: %s", ctx.request_id, outcome.detail)
     return {
         "status": outcome.status,
         "detail": outcome.detail,

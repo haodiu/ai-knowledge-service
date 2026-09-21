@@ -44,6 +44,32 @@ set-membership check.
    #1 way a "cập nhật policy" demo silently breaks — old and new-version
    chunks coexist during ingestion by design (Plan §5.2, §9.1). Tier filter
    uses the same scope.
+
+   > **"SQL join theo active_version_id là điều kiện cần nhưng chưa đủ khi
+   > dùng HNSW."** The SQL in Plan §9.1 is right as written and still not
+   > sufficient in real execution; two additions are mandatory, in *both*
+   > branches (`app/retrieval/repository.py`, verified Week 2):
+   > 1. **HNSW returns its `ef_search` (default 40) nearest chunks first and
+   >    only then applies the join/WHERE** — a post-filter in practice even
+   >    though the SQL reads as a pre-filter. If enough superseded/building/
+   >    internal chunks sit closer to the query than the active ones, the
+   >    result comes back **empty**. Every vector retrieval must therefore run
+   >    `SET LOCAL hnsw.iterative_scan = strict_order` in the same transaction
+   >    as the SELECT (pgvector >= 0.8.0; it lives inside `vector_search()`, so
+   >    no call path can skip it). This is best-effort on recall (bounded by
+   >    `hnsw.max_scan_tuples`); it never affects *safety* — the filter still
+   >    guarantees a non-active chunk is never returned.
+   > 2. **`AND dv.document_id = d.id`** in the join. The deferrable FK on
+   >    `documents.active_version_id` only proves the version *exists*, not
+   >    that it belongs to that document; without this a mis-pointed document
+   >    would surface another document's chunk under the wrong title/tier.
+   >
+   > Same class of problem, one rule: don't "simplify" either away. Tests
+   > `test_active_chunk_found_when_hnsw_candidates_are_all_superseded` and
+   > `test_pointer_to_another_documents_version_*` are the guards; they were
+   > mutation-checked (removing either makes them fail). Keep any test data
+   > for the HNSW case geometrically realistic (random points, not
+   > near-duplicates) or the test can pass vacuously.
 3. **Citations are validated deterministically, never by the LLM.**
    `answer.citations` must be a subset of the evidence set's
    `(document_version_id, chunk_id)` pairs, checked with plain set

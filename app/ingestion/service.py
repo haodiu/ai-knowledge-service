@@ -1,23 +1,22 @@
-"""Ingestion service: the one place where ingestion logic lives (Plan §12.4, §12.6, §12.8).
+"""Ingestion service: the one place where ingestion logic lives (Plan §12.4, §12.6, §12.8, §5.3).
 
-WEEK 5 NOTE — read before adding the Celery task
-------------------------------------------------
-`ingest_document()` below is the REAL ingestion logic (version creation, chunk/embed, idempotency,
-atomic activation). Week 5's `run_ingestion_job()` (the Celery task adapter in `tasks.py`) must
-CALL `ingest_document()` / `activate_version()`; it must not re-implement, fork or wrap-and-diverge
-from them under another name. The CLI calls the same functions (Plan §12.8: "CLI không được có
-pipeline riêng khác Celery task"). What Week 5 adds around them is queue mechanics only: the
-`ingestion_jobs` row, its status transitions, retry/backoff, and one extra
-`UPDATE ingestion_jobs ... completed` statement inside the activation transaction (invariant 9).
+Two lock-acquiring entrypoints share the same two locked building blocks
+(`_create_job_locked()`, `_process_locked()`), so there is exactly one ingestion pipeline:
 
-WEEK 5 NOTE — open decision: SupersededContentError
----------------------------------------------------
-When `ingest_document()` is wrapped by a Celery task and eventually exposed through the host
-webhook, "content identical to a superseded version" (`SupersededContentError`) needs a decided
-propagation to the host: HTTP 409? or `ingestion_jobs.status = 'failed'` plus a reason code? Not
-decided in Week 2 on purpose — just do not forget it. Related, also left for Week 5: a stale build
-(older version_no than the active one) is refused by `activate_version()` and its version is
-marked `failed`; Plan §12.6 rule 7 wants the *job* marked `superseded`, which needs the job row.
+- `ingest_document()`: acquires one advisory lock and holds it across BOTH job creation and
+  processing. This is the synchronous do-everything entrypoint (CLI default mode, tests, live
+  tests). Holding one lock across both steps reproduces the pre-Week-5 behaviour under concurrent
+  duplicate delivery: exactly one caller does the work and returns "activated"; the rest see the
+  now-active version inside the lock and return "unchanged" without processing anything.
+- `create_ingestion_job()` + `run_ingestion_job()`: each acquires and releases its OWN lock. Used
+  by the CLI's `--queue` mode and the Celery task (`app/ingestion/tasks.py`), where creation and
+  processing genuinely happen in two different calls -- possibly in two different processes -- so
+  they cannot share a single in-process lock scope. Processing is idempotent (Plan §12.6 rule 1):
+  a job already in a terminal state is a no-op, and `activate_version()` completes the job
+  atomically with activation (invariant 9), so redelivery after a crash can never double-apply.
+
+`run_ingestion_job()` is the function the Celery task adapter calls; `tasks.py` must call it, not
+reimplement it (Plan §12.8: "CLI không được có pipeline riêng khác Celery task" applies here too).
 """
 import hashlib
 import logging
@@ -27,7 +26,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import OperationalError
 
+from app.ai.errors import ModelTimeout, ModelUnavailable
 from app.db.models import EMBEDDING_DIM
 from app.ingestion.chunking import CHUNKING_VERSION, chunk_text
 from app.ingestion.indexing import content_hash, index_config_hash, replace_chunks
@@ -38,6 +39,8 @@ _LOG = logging.getLogger(__name__)
 # Injected so Week 2 needs no provider; Week 3's EmbeddingClient adapts to this shape.
 # Must return vectors of exactly app.db.models.EMBEDDING_DIM floats, one per input text.
 Embedder = Callable[[list[str]], list[list[float]]]
+
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed", "superseded"})
 
 
 class IngestionError(Exception):
@@ -53,23 +56,67 @@ class ActivationError(Exception):
     """Activation refused; nothing was changed."""
 
 
+class StaleVersionError(ActivationError):
+    """The building version is not newer than the currently active one -- two jobs raced for the
+    same document and this one lost (Plan §12.6 rule 7). A distinct subtype (not just a message)
+    so `run_ingestion_job()` can mark the *job* `superseded` rather than `failed` without string-
+    matching. `pytest.raises(ActivationError)` still catches it; nothing that only cared about the
+    base class needs to change."""
+
+
+class JobNotFoundError(Exception):
+    """`run_ingestion_job()`/`create_ingestion_job()` internals were given an unknown job_id."""
+
+
+class TransientIngestionError(Exception):
+    """A retryable failure occurred while processing an already-queued job (Plan §12.5): the job
+    row is marked `retrying` before this is raised, wrapping the original error as `__cause__`.
+    Celery's `ingest_document_task` (app/ingestion/tasks.py) retries on this specific type via
+    `autoretry_for`. Called outside Celery (CLI sync mode, tests), it is just another exception --
+    there is no special handling for it here."""
+
+
 @dataclass(frozen=True)
 class IngestResult:
     document_id: uuid.UUID
     version_id: uuid.UUID
     version_no: int
     outcome: Literal["activated", "unchanged"]
+    job_id: uuid.UUID | None = None  # None for "unchanged": no job is created for a no-op ingest
 
 
-def activate_version(engine: Engine, version_id: uuid.UUID) -> None:
+@dataclass(frozen=True)
+class JobRef:
+    """What `_create_job_locked()` hands back internally. `job_id` is None for "completed"
+    (content matched an already-active version: nothing to track) and for "rejected" (content
+    matched a superseded version: the audit job row was already written inside the same
+    transaction, un-keyed by job_id, see `_create_job_locked`). "rejected" only ever appears
+    inside this module: `create_ingestion_job()`/`ingest_document()` turn it into a raised
+    `SupersededContentError` immediately after their transaction commits -- raising while still
+    inside `engine.begin()` would roll back the audit insert this status represents."""
+
+    job_id: uuid.UUID | None
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_no: int
+    status: Literal["queued", "completed", "rejected"]
+    rejection_reason: str | None = None
+
+
+def activate_version(
+    engine: Engine, version_id: uuid.UUID, *, job_id: uuid.UUID | None = None
+) -> None:
     """Atomically make a fully-built `building` version the active one (invariant 9, Plan §5.2).
 
     Owns its transaction: supersede old -> activate new -> point documents.active_version_id ->
-    knowledge_version += 1, all-or-nothing. Raises ActivationError (changing nothing) if the
-    version is unknown, is not `building`, has no chunks, or is not newer than the active version.
+    knowledge_version += 1 -> (if `job_id` given) complete the job, all-or-nothing. Completing the
+    job in the SAME transaction as activation is invariant 9's "complete the job" step: it closes
+    the window where a crash right after activation would otherwise leave a job stuck `processing`
+    even though its version is already serving traffic.
 
-    The old version must be demoted BEFORE the new one is promoted: the partial unique index
-    `document_versions_one_active_per_document` is not deferrable and is checked per statement.
+    Raises ActivationError (changing nothing) if the version is unknown, is not `building`, or has
+    no chunks; raises StaleVersionError (an ActivationError subclass) if it is not newer than the
+    active version.
     """
     with engine.begin() as conn:
         document_id = conn.execute(
@@ -100,7 +147,7 @@ def activate_version(engine: Engine, version_id: uuid.UUID) -> None:
             {"d": document_id},
         ).scalar_one_or_none()
         if active_no is not None and active_no >= version.version_no:
-            raise ActivationError(
+            raise StaleVersionError(
                 f"version {version.version_no} is not newer than active version {active_no}"
             )
 
@@ -140,6 +187,18 @@ def activate_version(engine: Engine, version_id: uuid.UUID) -> None:
             ).rowcount,
             "bump knowledge_version",
         )
+        if job_id is not None:
+            _expect_one_row(
+                conn.execute(
+                    text(
+                        "UPDATE ingestion_jobs SET status = 'completed', completed_at = now(), "
+                        "document_version_id = :v "
+                        "WHERE id = :j AND status IN ('processing', 'retrying')"
+                    ),
+                    {"v": version_id, "j": job_id},
+                ).rowcount,
+                "complete ingestion job",
+            )
 
 
 def _expect_one_row(rowcount: int, what: str) -> None:
@@ -166,31 +225,48 @@ def ingest_document(
     """Chunk + embed `content` into a new version and activate it; no-op if already active.
 
     Idempotent (Plan §12.6): keyed by (document, content_hash, index_config_hash). Ingests of the
-    same document are serialised with a session-level advisory lock, which the server releases if
-    this process dies. On any failure after the version row exists, the version is marked `failed`
-    and the previously active version keeps serving untouched.
+    same document are serialised with a session-level advisory lock, held across BOTH job creation
+    and processing (see module docstring), which the server releases if this process dies. On any
+    failure after the version row exists, the version is marked `failed` and the previously active
+    version keeps serving untouched.
 
     `embedding_model` names the model behind `embed`; it is part of index_config_hash, so changing
     it re-indexes unchanged content.
     """
     if not content.strip():
         raise IngestionError("document content is empty")
-    chunks = chunk_text(content)
     key = _advisory_key(external_id)
 
     with engine.connect() as lock_conn:
         lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
         lock_conn.commit()  # session-level lock survives the commit; don't sit idle-in-transaction
         try:
-            return _ingest_locked(
-                engine,
-                external_id=external_id,
-                title=title,
-                tier=tier,
-                content=content,
-                chunks=chunks,
-                embed=embed,
-                embedding_model=embedding_model,
+            with engine.begin() as conn:
+                job = _create_job_locked(
+                    conn,
+                    external_id=external_id,
+                    title=title,
+                    tier=tier,
+                    content=content,
+                    embedding_model=embedding_model,
+                )
+            if job.status == "rejected":
+                assert job.rejection_reason is not None
+                raise SupersededContentError(job.rejection_reason)
+            if job.status == "completed":
+                return IngestResult(
+                    job.document_id, job.version_id, job.version_no, "unchanged", job.job_id
+                )
+            assert job.job_id is not None  # status == "queued" always has a job_id
+            _process_locked(engine, job.job_id, embed=embed)
+            final_status = _job_status(engine, job.job_id)
+            if final_status != "completed":
+                # Only reachable if a concurrent process raced this exact job to a different
+                # terminal state under the same lock hand-off; genuine processing failures raise
+                # out of _process_locked() above instead of returning here.
+                raise IngestionError(f"{external_id}: job ended as {final_status!r}, not completed")
+            return IngestResult(
+                job.document_id, job.version_id, job.version_no, "activated", job.job_id
             )
         finally:
             try:
@@ -202,82 +278,356 @@ def ingest_document(
                 lock_conn.invalidate()
 
 
-def _ingest_locked(
+def create_ingestion_job(
     engine: Engine,
     *,
     external_id: str,
     title: str,
     tier: Tier,
     content: str,
-    chunks: list[str],
-    embed: Embedder,
     embedding_model: str,
-) -> IngestResult:
+) -> JobRef:
+    """Create (or idempotently reuse) an `ingestion_jobs` row for `content`, without processing it.
+
+    For callers that hand processing off to a worker instead of doing it inline: the CLI's
+    `--queue` mode and, once it exists, the HTTP ingestion endpoint. Pair with
+    `run_ingestion_job()` to actually do the work. `ingest_document()` covers the synchronous
+    create-and-process case and should be preferred when there is no reason to split the two.
+
+    Raises SupersededContentError, exactly as `ingest_document()` does, if `content` is identical
+    to a version that has already been superseded.
+    """
+    if not content.strip():
+        raise IngestionError("document content is empty")
+    key = _advisory_key(external_id)
+
+    with engine.connect() as lock_conn:
+        lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
+        lock_conn.commit()
+        try:
+            with engine.begin() as conn:
+                job = _create_job_locked(
+                    conn,
+                    external_id=external_id,
+                    title=title,
+                    tier=tier,
+                    content=content,
+                    embedding_model=embedding_model,
+                )
+            if job.status == "rejected":
+                assert job.rejection_reason is not None
+                raise SupersededContentError(job.rejection_reason)
+            return job
+        finally:
+            try:
+                lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                lock_conn.commit()
+            except Exception:
+                _LOG.warning("advisory unlock failed; invalidating connection", exc_info=True)
+                lock_conn.invalidate()
+
+
+def run_ingestion_job(engine: Engine, job_id: uuid.UUID, *, embed: Embedder) -> None:
+    """Process a queued/retrying job to completion: chunk, embed, write chunks, activate.
+
+    Idempotent (Plan §12.6 rule 1): a job already in a terminal state (`completed`/`failed`/
+    `superseded`) is a no-op. This is what the Celery task adapter (`app/ingestion/tasks.py`)
+    calls, and what the CLI's `--queue` mode drives synchronously without Celery in tests.
+    """
+    status = _job_status(engine, job_id)
+    if status is None:
+        raise JobNotFoundError(str(job_id))
+    if status in _TERMINAL_JOB_STATUSES:
+        return
+    ctx = _load_job_context(engine, job_id)
+    key = _advisory_key(ctx.external_id)
+
+    with engine.connect() as lock_conn:
+        lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
+        lock_conn.commit()
+        try:
+            _process_locked(engine, job_id, embed=embed)
+        finally:
+            try:
+                lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                lock_conn.commit()
+            except Exception:
+                _LOG.warning("advisory unlock failed; invalidating connection", exc_info=True)
+                lock_conn.invalidate()
+
+
+def _create_job_locked(
+    conn: Connection,
+    *,
+    external_id: str,
+    title: str,
+    tier: Tier,
+    content: str,
+    embedding_model: str,
+) -> JobRef:
     c_hash = content_hash(content)
     cfg_hash = index_config_hash(embedding_model)
+    document_id = _get_or_create_document(conn, external_id, title, tier)
+    existing = conn.execute(
+        text(
+            "SELECT id, version_no, status FROM document_versions "
+            "WHERE document_id = :d AND content_hash = :h AND index_config_hash = :c"
+        ),
+        {"d": document_id, "h": c_hash, "c": cfg_hash},
+    ).one_or_none()
 
-    with engine.begin() as conn:
-        document_id = _get_or_create_document(conn, external_id, title, tier)
-        existing = conn.execute(
+    if existing is not None and existing.status == "active":
+        # Nothing to do or track: this is a no-op resubmission of what is already live.
+        return JobRef(None, document_id, existing.id, existing.version_no, "completed")
+
+    if existing is not None and existing.status == "superseded":
+        # A terminal, one-off record of the rejected attempt -- not something later redelivery
+        # needs to be deduplicated against, so the key just needs to be unique, not deterministic.
+        # document_version_id is left NULL: it is UNIQUE, and the superseded version's slot is
+        # already taken by the job that originally built it -- this row is an audit trail of a
+        # *rejected* attempt, not a second job for that same version. version_no (a plain int, no
+        # FK) still records which version the rejected content matched.
+        reject_key = (
+            f"{document_id}:{existing.version_no}:{c_hash}:{cfg_hash}:rejected:{uuid.uuid4().hex}"
+        )
+        conn.execute(
             text(
-                "SELECT id, version_no, status FROM document_versions "
-                "WHERE document_id = :d AND content_hash = :h AND index_config_hash = :c"
+                "INSERT INTO ingestion_jobs (document_id, document_version_id, version_no, "
+                "content_hash, idempotency_key, status, error_code, completed_at) "
+                "VALUES (:d, NULL, :n, :h, :k, 'failed', 'superseded_content', now())"
             ),
-            {"d": document_id, "h": c_hash, "c": cfg_hash},
-        ).one_or_none()
-
-        if existing is not None and existing.status == "active":
-            return IngestResult(document_id, existing.id, existing.version_no, "unchanged")
-        if existing is not None and existing.status == "superseded":
-            raise SupersededContentError(
+            {
+                "d": document_id,
+                "n": existing.version_no,
+                "h": c_hash,
+                "k": reject_key,
+            },
+        )
+        # Do NOT raise here: this is still inside the caller's `engine.begin()`, and raising out
+        # of that block would roll back the audit INSERT just above. Report "rejected" instead;
+        # the caller raises SupersededContentError once its transaction has committed.
+        return JobRef(
+            None,
+            document_id,
+            existing.id,
+            existing.version_no,
+            "rejected",
+            rejection_reason=(
                 f"{external_id}: content is identical to superseded version {existing.version_no}"
-            )
-        if existing is not None:
-            # building/failed: rebuild the same row (the unique key forbids inserting a new one)
-            version_id, version_no = existing.id, existing.version_no
-            conn.execute(
-                text("UPDATE document_versions SET status = 'building' WHERE id = :v"),
-                {"v": version_id},
-            )
-        else:
-            version_no = conn.execute(
-                text(
-                    "SELECT coalesce(max(version_no), 0) + 1 FROM document_versions "
-                    "WHERE document_id = :d"
-                ),
-                {"d": document_id},
-            ).scalar_one()
-            version_id = conn.execute(
-                text(
-                    "INSERT INTO document_versions "
-                    "(document_id, version_no, content, content_hash, chunking_version, "
-                    "embedding_model, index_config_hash, status) "
-                    "VALUES (:d, :n, :content, :h, :cv, :em, :c, 'building') RETURNING id"
-                ),
-                {
-                    "d": document_id,
-                    "n": version_no,
-                    "content": content,
-                    "h": c_hash,
-                    "cv": CHUNKING_VERSION,
-                    "em": embedding_model,
-                    "c": cfg_hash,
-                },
-            ).scalar_one()
+            ),
+        )
 
+    if existing is not None:
+        # building/failed: rebuild the same row (the unique key forbids inserting a new one)
+        version_id, version_no = existing.id, existing.version_no
+        conn.execute(
+            text("UPDATE document_versions SET status = 'building' WHERE id = :v"),
+            {"v": version_id},
+        )
+    else:
+        version_no = conn.execute(
+            text(
+                "SELECT coalesce(max(version_no), 0) + 1 FROM document_versions "
+                "WHERE document_id = :d"
+            ),
+            {"d": document_id},
+        ).scalar_one()
+        version_id = conn.execute(
+            text(
+                "INSERT INTO document_versions "
+                "(document_id, version_no, content, content_hash, chunking_version, "
+                "embedding_model, index_config_hash, status) "
+                "VALUES (:d, :n, :content, :h, :cv, :em, :c, 'building') RETURNING id"
+            ),
+            {
+                "d": document_id,
+                "n": version_no,
+                "content": content,
+                "h": c_hash,
+                "cv": CHUNKING_VERSION,
+                "em": embedding_model,
+                "c": cfg_hash,
+            },
+        ).scalar_one()
+
+    idem_key = f"{document_id}:{version_no}:{c_hash}:{cfg_hash}"
+    job_id = _find_or_recycle_job(
+        conn,
+        document_id=document_id,
+        version_id=version_id,
+        version_no=version_no,
+        content_hash_value=c_hash,
+        idempotency_key=idem_key,
+    )
+    return JobRef(job_id, document_id, version_id, version_no, "queued")
+
+
+def _find_or_recycle_job(
+    conn: Connection,
+    *,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    version_no: int,
+    content_hash_value: str,
+    idempotency_key: str,
+) -> uuid.UUID:
+    """Find the job already tracking this exact (document, version, content, config) attempt, or
+    create one. An in-flight job (`queued`/`processing`/`retrying`) is returned untouched -- this
+    is the redelivery-dedup case duplicate Celery/CLI submissions must hit (Plan §12.6 rule 1: at
+    most one job actually does the work). Anything else found (a stale `failed`/`superseded`
+    row -- `completed` cannot legitimately coexist with a `building`/`failed` version, but is
+    handled the same way defensively) is recycled to `queued`, mirroring how a retry rebuilds the
+    same version row rather than creating a new one.
+    """
+    existing = conn.execute(
+        text("SELECT id, status FROM ingestion_jobs WHERE idempotency_key = :k"),
+        {"k": idempotency_key},
+    ).one_or_none()
+    if existing is None:
+        job_id: uuid.UUID = conn.execute(
+            text(
+                "INSERT INTO ingestion_jobs (document_id, document_version_id, version_no, "
+                "content_hash, idempotency_key, status) VALUES (:d, :v, :n, :h, :k, 'queued') "
+                "RETURNING id"
+            ),
+            {
+                "d": document_id,
+                "v": version_id,
+                "n": version_no,
+                "h": content_hash_value,
+                "k": idempotency_key,
+            },
+        ).scalar_one()
+        return job_id
+    if existing.status in ("queued", "processing", "retrying"):
+        in_flight_id: uuid.UUID = existing.id  # already in flight; another caller owns it
+        return in_flight_id
+    conn.execute(
+        text(
+            "UPDATE ingestion_jobs SET status = 'queued', error_code = NULL, "
+            "error_message = NULL, document_version_id = :v, completed_at = NULL, "
+            "retry_count = retry_count + 1 WHERE id = :j"
+        ),
+        {"v": version_id, "j": existing.id},
+    )
+    job_id = existing.id
+    return job_id
+
+
+@dataclass(frozen=True)
+class _JobContext:
+    version_id: uuid.UUID
+    external_id: str
+    content: str
+
+
+def _job_status(engine: Engine, job_id: uuid.UUID) -> str | None:
+    with engine.connect() as conn:
+        status: str | None = conn.execute(
+            text("SELECT status FROM ingestion_jobs WHERE id = :j"), {"j": job_id}
+        ).scalar_one_or_none()
+    return status
+
+
+def _load_job_context(engine: Engine, job_id: uuid.UUID) -> _JobContext:
+    """Only called once the job is known non-terminal, so `document_version_id` is guaranteed
+    non-null: cleanup (Plan §12.7) never touches a `building` version, which is what a queued/
+    processing/retrying job always points at."""
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT dv.id AS version_id, d.external_id, dv.content "
+                "FROM ingestion_jobs j "
+                "JOIN documents d ON d.id = j.document_id "
+                "JOIN document_versions dv ON dv.id = j.document_version_id "
+                "WHERE j.id = :j"
+            ),
+            {"j": job_id},
+        ).one()
+    return _JobContext(row.version_id, row.external_id, row.content)
+
+
+def _process_locked(engine: Engine, job_id: uuid.UUID, *, embed: Embedder) -> None:
+    # Re-check after acquiring the lock: another process may have just finished this job while
+    # this caller was waiting for it.
+    status = _job_status(engine, job_id)
+    if status is None or status in _TERMINAL_JOB_STATUSES:
+        return
+    ctx = _load_job_context(engine, job_id)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE ingestion_jobs SET status = 'processing', "
+                "started_at = coalesce(started_at, now()) WHERE id = :j"
+            ),
+            {"j": job_id},
+        )
+
+    chunks = chunk_text(ctx.content)
     try:
-        vectors = embed(chunks)  # slow/remote in Week 3: deliberately outside any DB transaction
+        vectors = embed(chunks)  # slow/remote: deliberately outside any DB transaction
         if len(vectors) != len(chunks) or any(len(v) != EMBEDDING_DIM for v in vectors):
             raise IngestionError(
                 f"embedder must return {len(chunks)} vectors of {EMBEDDING_DIM} floats"
             )
         with engine.begin() as conn:
-            replace_chunks(conn, version_id, chunks, vectors)
-        activate_version(engine, version_id)
-    except Exception:
-        _mark_failed(engine, version_id)
+            replace_chunks(conn, ctx.version_id, chunks, vectors)
+        activate_version(engine, ctx.version_id, job_id=job_id)
+    except StaleVersionError as exc:
+        _mark_version_failed(engine, ctx.version_id)
+        _mark_job(engine, job_id, status="superseded")
+        _LOG.info("job %s superseded: %s", job_id, exc)
+    except Exception as exc:
+        _mark_version_failed(engine, ctx.version_id)
+        if _is_transient(exc):
+            _mark_job(
+                engine, job_id, status="retrying", error_code=_error_code(exc), bump_retry=True
+            )
+            raise TransientIngestionError(str(exc)) from exc
+        _mark_job(engine, job_id, status="failed", error_code=_error_code(exc))
         raise
-    return IngestResult(document_id, version_id, version_no, "activated")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Fail closed: only recognised, genuinely-transient causes get a Celery retry (Plan §12.5:
+    "lỗi validation/OCR không hỗ trợ không được retry vô ích"). An unrecognised exception type is
+    treated as permanent, so a real bug surfaces once instead of retry-looping three times."""
+    if isinstance(exc, ModelTimeout):
+        return True
+    if isinstance(exc, ModelUnavailable):
+        return exc.retryable
+    if isinstance(exc, OperationalError):  # DB connection lost/refused/timed out
+        return True
+    return False
+
+
+def _error_code(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, str) else type(exc).__name__
+
+
+def _mark_job(
+    engine: Engine,
+    job_id: uuid.UUID,
+    *,
+    status: str,
+    error_code: str | None = None,
+    bump_retry: bool = False,
+) -> None:
+    """Best effort: a failure recording the failure must not mask the original error."""
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE ingestion_jobs SET status = :s, error_code = :ec, "
+                    "retry_count = retry_count + :bump, completed_at = "
+                    "CASE WHEN :s IN ('failed', 'superseded') THEN now() ELSE completed_at END "
+                    "WHERE id = :j"
+                ),
+                {"s": status, "ec": error_code, "bump": 1 if bump_retry else 0, "j": job_id},
+            )
+    except Exception:
+        _LOG.warning("could not mark job %s as %s", job_id, status, exc_info=True)
 
 
 def _get_or_create_document(
@@ -312,7 +662,7 @@ def _get_or_create_document(
     return document_id
 
 
-def _mark_failed(engine: Engine, version_id: uuid.UUID) -> None:
+def _mark_version_failed(engine: Engine, version_id: uuid.UUID) -> None:
     """Best effort: a failure here must not mask the original error."""
     try:
         with engine.begin() as conn:

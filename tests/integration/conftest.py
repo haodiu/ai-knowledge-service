@@ -75,7 +75,7 @@ def db_engine(test_db_url: str) -> Iterator[Engine]:
         conn.execute(
             text(
                 "TRUNCATE documents, document_versions, chunks, conversations, turns, "
-                "model_calls, turn_sources"
+                "model_calls, turn_sources, ingestion_jobs"
             )
         )
         conn.execute(text("UPDATE knowledge_base_state SET knowledge_version = 0"))
@@ -157,3 +157,32 @@ def point_active(conn: Connection, document_id: uuid.UUID, version_id: uuid.UUID
         text("UPDATE documents SET active_version_id = :v WHERE id = :d"),
         {"v": version_id, "d": document_id},
     )
+
+
+def make_job(
+    conn: Connection,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID | None,
+    version_no: int,
+    status: str,
+    *,
+    content_hash: str = "hash",
+    idempotency_key: str | None = None,
+    retry_count: int = 0,
+) -> uuid.UUID:
+    return conn.execute(
+        text(
+            "INSERT INTO ingestion_jobs (document_id, document_version_id, version_no, "
+            "content_hash, idempotency_key, status, retry_count) "
+            "VALUES (:d, :v, :n, :h, :k, :s, :r) RETURNING id"
+        ),
+        {
+            "d": document_id,
+            "v": version_id,
+            "n": version_no,
+            "h": content_hash,
+            "k": idempotency_key or f"job-{uuid.uuid4().hex}",
+            "s": status,
+            "r": retry_count,
+        },
+    ).scalar_one()

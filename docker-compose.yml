@@ -33,7 +33,7 @@ services:
 
   celery-worker:
     image: rag-chatbot:dev
-    command: celery -A app.worker.celery_app worker --loglevel=INFO --concurrency=2
+    command: celery -A app.worker.celery_app worker --loglevel=INFO --concurrency=2 -Q ingestion.default
     environment: *app-env
     depends_on:
       api: { condition: service_healthy }

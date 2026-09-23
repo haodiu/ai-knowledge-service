@@ -231,6 +231,46 @@ class TurnSource(Base):
     )
 
 
+class IngestionJob(Base):
+    """Queue tracking for Celery ingestion (Plan §5.3). `document_version_id` is nulled, not
+    cascade-deleted, when its version is cleaned up (Plan §12.7) -- the audit trail survives."""
+
+    __tablename__ = "ingestion_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'retrying', 'completed', 'failed', 'superseded')",
+            name="status",
+        ),
+        Index("ingestion_jobs_status_available_at_idx", "status", "available_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+    )
+    document_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("document_versions.id", ondelete="SET NULL"),
+        unique=True,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    celery_task_id: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+    error_code: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ModelCall(Base):
     """Metadata of one LLM call. No column can hold a prompt or a response (Plan §5.4)."""
 

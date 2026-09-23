@@ -26,6 +26,7 @@ from app.api.dependencies import (
     get_models,
     get_prompts,
     get_settings_dep,
+    get_tool_client,
 )
 from app.auth.policies import AuthorizationContext
 from app.db import repositories
@@ -34,6 +35,7 @@ from app.graph.result import TurnResult, TurnStatus
 from app.graph.runner import run_turn
 from app.graph.runtime import Phase
 from app.settings import Settings
+from app.tools.subscription import SubscriptionToolClient
 
 _LOG = logging.getLogger(__name__)
 
@@ -116,6 +118,7 @@ async def _stream_turn(
     models: ModelRegistry,
     prompts: Prompts,
     settings: Settings,
+    tool_client: SubscriptionToolClient | None,
 ) -> AsyncIterator[bytes]:
     queue: asyncio.Queue[Phase | None] = asyncio.Queue()
 
@@ -128,7 +131,10 @@ async def _stream_turn(
                 engine=engine, conversation_id=conversation_id, turn_id=turn_id,
                 question=question, auth=auth, models=models, prompts=prompts,
                 embedding_model=settings.embedding_model,
-                chat_timeout_seconds=settings.chat_timeout_seconds, on_phase=on_phase,
+                chat_timeout_seconds=settings.chat_timeout_seconds,
+                tool_client=tool_client,
+                tool_timeout_seconds=settings.subscription_tool_timeout_seconds,
+                on_phase=on_phase,
             )
         finally:
             await queue.put(None)  # sentinel: no more phase events, whatever the outcome
@@ -163,6 +169,7 @@ async def post_turn(
     models: Annotated[ModelRegistry, Depends(get_models)],
     prompts: Annotated[Prompts, Depends(get_prompts)],
     settings: Annotated[Settings, Depends(get_settings_dep)],
+    tool_client: Annotated[SubscriptionToolClient | None, Depends(get_tool_client)],
 ) -> StreamingResponse:
     owner = await repositories.conversation_owner(engine, conversation_id)
     if owner is None or owner != auth.user_id:
@@ -173,6 +180,7 @@ async def post_turn(
         _stream_turn(
             engine=engine, conversation_id=conversation_id, turn_id=turn_id,
             question=body.question, auth=auth, models=models, prompts=prompts, settings=settings,
+            tool_client=tool_client,
         ),
         media_type="text/event-stream",
         # A citation's source_id (in the "answer" event) is only openable via GET

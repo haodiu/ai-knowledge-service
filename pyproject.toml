@@ -44,6 +44,8 @@ testpaths = ["tests"]
 markers = [
     "integration: needs a running PostgreSQL (docker compose up -d postgres)",
     "live: calls the real Gemini API; needs GEMINI_API_KEY (skipped otherwise)",
+    "contract: mocked host contract (e.g. the subscription tool's Spring Boot host) -- no live DB/network",
+    "e2e: full-turn scenarios via the graph Harness (Plan §16.3) -- no live DB/broker",
 ]
 
 [tool.ruff]

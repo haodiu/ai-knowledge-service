@@ -33,21 +33,40 @@ def route_after_understand(state: RAGState) -> Literal["plan", "fallback"]:
     return "fallback" if state.get("error") else "plan"
 
 
-def route_after_plan(state: RAGState) -> Literal["retrieve", "fallback"]:
+def route_after_plan(state: RAGState) -> Literal["retrieve", "tool", "fallback"]:
     plan = state.get("plan")
     if state.get("error") or plan is None:
         return "fallback"
-    if plan.intent == "clarification" or not plan.needs_retrieval:
+    if plan.intent == "clarification":
         return "fallback"
-    return "retrieve"
+    if plan.needs_retrieval:
+        return "retrieve"  # tool (if any) runs after retrieval -- see route_after_retrieve
+    if plan.tool_request is not None:
+        return "tool"  # pure "subscription" intent: nothing to retrieve, go straight to the tool
+    return "fallback"
 
 
-def route_after_retrieve(state: RAGState) -> Literal["grade", "fallback"]:
-    if state.get("error") or not state.get("evidence"):
+def route_after_retrieve(state: RAGState) -> Literal["tool", "grade", "fallback"]:
+    if state.get("error"):
+        return "fallback"
+    plan = state.get("plan")
+    if plan is not None and plan.tool_request is not None and not state.get("tool_executed"):
+        # Tool runs AFTER retrieval on purpose (Plan §18/CLAUDE.md "hybrid" case): build_evidence
+        # always keeps the first item of its `new` argument regardless of the cap, so the tool
+        # result must be `new` on its OWN build_evidence call, not `existing` on retrieve's -- the
+        # tool node is what makes it un-evictable, not the retrieve step.
+        return "tool"
+    if not state.get("evidence"):
         return "fallback"  # nothing to grade: do not spend a call (Plan §11.2)
     if state.get("retrieval_attempts", 0) >= MAX_RETRIEVAL_ATTEMPTS and \
             state.get("new_evidence_count", 1) == 0:
         return "fallback"  # the rewrite found nothing new: grading identical evidence is waste
+    return "grade"
+
+
+def route_after_tool(state: RAGState) -> Literal["grade", "fallback"]:
+    if state.get("error") or not state.get("evidence"):
+        return "fallback"  # a 404 with no prior retrieval evidence ends up here: no evidence at all
     return "grade"
 
 
@@ -101,6 +120,8 @@ def fallback_outcome(state: RAGState) -> FallbackOutcome:
     """
     error = state.get("error")
     if error is not None:
+        if error.kind == "clarification":  # tool 409: ambiguous identifier (Plan §10)
+            return FallbackOutcome("clarification", error.code, error.clarification_question)
         status: TurnStatus = "blocked" if error.kind == "blocked" else "temporarily_unavailable"
         return FallbackOutcome(status, error.code, None, error.retry_after_seconds)
 
@@ -108,7 +129,7 @@ def fallback_outcome(state: RAGState) -> FallbackOutcome:
     if plan is not None and plan.intent == "clarification":
         return FallbackOutcome("clarification", "planner_clarification",
                                plan.clarification_question)
-    if plan is not None and not plan.needs_retrieval:
+    if plan is not None and not plan.needs_retrieval and plan.tool_request is None:
         return FallbackOutcome("insufficient_evidence", "no_retrieval_needed")
 
     draft = state.get("draft")

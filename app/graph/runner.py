@@ -34,6 +34,8 @@ from app.graph.state import RAGState
 from app.graph.workflow import GraphLoopError, run_graph
 from app.retrieval.hybrid_search import hybrid_search
 from app.retrieval.schemas import Evidence, Tier
+from app.tools.recorder import SqlToolCallRecorder
+from app.tools.subscription import SubscriptionToolClient
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +94,7 @@ async def execute_turn(
         plan=state.get("plan"),
         grade=state.get("grade"),
         proposed_tool=state.get("proposed_tool"),
-        tool_executed=False,
+        tool_executed=state.get("tool_executed", False),
         retry_after_seconds=state.get("retry_after_seconds"),
         detail=detail,
         retrieval_attempts=state.get("retrieval_attempts", 0),
@@ -123,6 +125,8 @@ async def run_turn(
     prompts: Prompts,
     embedding_model: str,
     chat_timeout_seconds: float,
+    tool_client: SubscriptionToolClient | None,
+    tool_timeout_seconds: float,
     retriever: Retriever | None = None,
     on_phase: PhaseCallback | None = None,
     timeout_seconds: float = GRAPH_TIMEOUT_SECONDS,
@@ -146,6 +150,9 @@ async def run_turn(
         ),
         embedding_model=embedding_model,
         chat_timeout_seconds=chat_timeout_seconds,
+        tool_client=tool_client,
+        tool_recorder=SqlToolCallRecorder(engine, turn_id),
+        tool_timeout_seconds=tool_timeout_seconds,
         on_phase=on_phase,
     )
     result = await execute_turn(

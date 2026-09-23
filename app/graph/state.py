@@ -15,9 +15,10 @@ from app.retrieval.schemas import Evidence, SourceSnapshot
 class TurnError:
     """A failure a node caught. Routers send any state with an error straight to the fallback."""
 
-    kind: Literal["blocked", "unavailable"]
+    kind: Literal["blocked", "unavailable", "clarification"]  # clarification: tool 409 (Week 7)
     code: str
     retry_after_seconds: float | None = None
+    clarification_question: str | None = None  # only set when kind == "clarification"
 
 
 class RAGState(TypedDict, total=False):
@@ -26,7 +27,8 @@ class RAGState(TypedDict, total=False):
     recent_turns: list[str]  # always empty until conversation history lands (Week 6)
 
     plan: QueryPlan | None
-    proposed_tool: ToolRequest | None  # a proposal only; nothing executes it before Week 7
+    proposed_tool: ToolRequest | None  # the planner's proposal, whether or not it gets executed
+    tool_executed: bool  # was the tool actually called this turn (any outcome), set by tool_node
 
     retrieval_query: str
     retrieval_attempts: int

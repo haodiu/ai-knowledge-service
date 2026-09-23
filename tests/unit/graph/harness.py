@@ -1,5 +1,6 @@
 """Builds a GraphRuntimeContext around fakes so the graph runs with no DB and no network."""
 from collections.abc import Sequence
+from typing import Any
 
 from app.ai.chat.fake import FakeChatModelClient
 from app.ai.embeddings.fake import FakeEmbeddingClient
@@ -11,14 +12,18 @@ from app.graph.result import TurnResult
 from app.graph.runner import execute_turn
 from app.graph.runtime import GraphRuntimeContext, Phase
 from app.retrieval.schemas import Evidence, Tier
+from app.tools.fake import FakeSubscriptionToolClient
+from app.tools.recorder import InMemoryToolCallRecorder
 from tests.unit.ai.helpers import FakeClock, make_budget
+
+_UNSET = object()  # lets Harness(tool=None) mean "no tool client configured", not "use the default"
 
 
 class Harness:
     def __init__(  # type: ignore[no-untyped-def]
         self, plan=(), grade=(), answer=(), evidence: Sequence[Evidence] = (), *,
         retrievals: Sequence[Sequence[Evidence]] | None = None,
-        tier: Tier = Tier.GENERAL, planner=None, grader=None, answerer=None,
+        tier: Tier = Tier.GENERAL, planner=None, grader=None, answerer=None, tool: Any = _UNSET,
     ) -> None:
         self.clock = FakeClock()
         self.planner = planner or FakeChatModelClient(list(plan))
@@ -31,6 +36,8 @@ class Harness:
         self.phases: list[Phase] = []
         self.budget = make_budget(self.clock)
         self.tier = tier
+        self.tool_client = FakeSubscriptionToolClient() if tool is _UNSET else tool
+        self.tool_recorder = InMemoryToolCallRecorder()
 
     async def _retrieve(self, query, embedding, allowed_tiers):  # type: ignore[no-untyped-def]
         self.retrieve_calls.append((query, len(embedding), tuple(allowed_tiers)))
@@ -51,6 +58,9 @@ class Harness:
             budget=self.budget,
             embedding_model="fake-embed",
             chat_timeout_seconds=20.0,
+            tool_client=self.tool_client,
+            tool_recorder=self.tool_recorder,
+            tool_timeout_seconds=5.0,
             on_phase=self._on_phase,
         )
 
@@ -62,3 +72,7 @@ class Harness:
     @property
     def chat_calls(self) -> int:
         return len(self.planner.calls) + len(self.grader.calls) + len(self.answerer.calls)
+
+    @property
+    def tool_calls(self) -> int:
+        return len(self.tool_client.calls) if self.tool_client is not None else 0

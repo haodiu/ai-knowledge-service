@@ -42,6 +42,19 @@ def test_no_call_can_start_after_the_deadline() -> None:
         budget.acquire_generative()
 
 
+def test_no_tool_call_can_start_after_the_deadline_either() -> None:
+    """acquire_tool() must be bounded by the deadline the same way acquire_generative() is --
+    otherwise a tool call could be "acquired" with ~0s left, and `call_timeout()` would then hand
+    httpx a timeout of exactly 0, which httpx treats as NO timeout, not "expire immediately"."""
+    clock = FakeClock()
+    budget = make_budget(clock, timeout=30.0)
+    clock.now += 30.0
+    assert not budget.can_acquire_tool()
+    with pytest.raises(BudgetExhausted):
+        budget.acquire_tool()
+    assert budget.tool_calls == 0  # the failed acquire did not count
+
+
 def test_per_call_timeout_is_the_smaller_of_configured_and_remaining() -> None:
     clock = FakeClock()
     budget = make_budget(clock, timeout=30.0)

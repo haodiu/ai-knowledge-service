@@ -50,9 +50,12 @@ class TurnBudget:
             raise BudgetExhausted("generative call budget or deadline exhausted")
         self.generative_calls += 1
 
+    def can_acquire_tool(self) -> bool:
+        return self.tool_calls < self.max_tool_calls and self.remaining_seconds() > 0
+
     def acquire_tool(self) -> None:
-        if self.tool_calls >= self.max_tool_calls:
-            raise BudgetExhausted("tool call budget exhausted")
+        if not self.can_acquire_tool():
+            raise BudgetExhausted("tool call budget or deadline exhausted")
         self.tool_calls += 1
 
     def call_timeout(self, configured: float) -> float:

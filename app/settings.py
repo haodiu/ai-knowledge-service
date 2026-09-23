@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # JWT above: host-to-host, no tier/AuthorizationContext involved.
     ingestion_service_token: SecretStr
 
+    # --- Subscription tool (Plan §10, §18 Tuần 7). Host-to-host like ingestion_service_token
+    # above, scoped to a read-only, on-behalf-of lookup -- ctx.auth.user_id is forwarded, never
+    # the raw JWT (invariant #1). Optional like gemini_api_key: only --fake runs work without it,
+    # since no host Payment/Subscription webapp exists yet.
+    subscription_service_base_url: str | None = None
+    subscription_service_token: SecretStr | None = None
+    subscription_tool_timeout_seconds: float = Field(default=5.0, gt=0, le=10)
+
     @field_validator("planner_model", "grader_model", "answer_model", "embedding_model")
     @classmethod
     def _pin_model(cls, value: str) -> str:

@@ -296,3 +296,29 @@ class ModelCall(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_NOW
     )
+
+
+class ToolCall(Base):
+    """Metadata of one subscription-tool call (Plan §10, §17). Structural twin of `ModelCall`:
+    no column holds the raw `subscription_id`/`customer_id` value, only which kind was used."""
+
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        CheckConstraint("tool_name IN ('get_subscription')", name="tool_name"),
+        CheckConstraint("identifier_kind IN ('subscription_id', 'customer_id')",
+                        name="identifier_kind"),
+        CheckConstraint("status IN ('ok', 'error')", name="status"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    turn_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("turns.id", ondelete="CASCADE"), nullable=False
+    )
+    tool_name: Mapped[str] = mapped_column(Text, nullable=False)
+    identifier_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )

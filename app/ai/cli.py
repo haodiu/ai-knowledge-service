@@ -26,6 +26,8 @@ from app.graph.runtime import Phase
 from app.ingestion.fake_embedder import FAKE_EMBEDDING_MODEL
 from app.retrieval.schemas import Tier
 from app.settings import get_settings
+from app.tools.fake import FakeSubscriptionToolClient
+from app.tools.subscription import SubscriptionToolClient, build_tool_client
 
 _EXIT = {
     "answered": 0, "clarification": 0, "insufficient_evidence": 1, "blocked": 1,
@@ -39,7 +41,8 @@ def _print(result: TurnResult) -> None:
     if result.plan:
         print(f"plan: intent={result.plan.intent} query={result.plan.retrieval_query!r}")
     if result.proposed_tool:
-        print(f"tool proposed (NOT executed): {result.proposed_tool.model_dump_json()}")
+        state = "executed" if result.tool_executed else "NOT executed"
+        print(f"tool proposed ({state}): {result.proposed_tool.model_dump_json()}")
     if result.evidence:
         print("evidence:")
         for e in result.evidence:
@@ -68,6 +71,18 @@ async def _ask(question: str, *, tier: Tier, fake: bool) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    tool_client: SubscriptionToolClient | None
+    if fake:
+        tool_client = FakeSubscriptionToolClient()
+    else:
+        try:
+            tool_client = build_tool_client(settings)
+        except ConfigurationError:
+            # Unlike the chat models above, not every question needs the tool (no
+            # Payment/Subscription host exists yet) -- only a question whose plan actually
+            # proposes one pays for that, as `temporarily_unavailable`/`tool_unavailable`.
+            tool_client = None
+
     async def show_phase(phase: Phase) -> None:  # phase events only; never any answer text
         print(f"[{phase}]", file=sys.stderr)
 
@@ -82,7 +97,10 @@ async def _ask(question: str, *, tier: Tier, fake: bool) -> int:
             auth=AuthorizationContext(user_id="cli", tier=tier),
             models=models, prompts=prompts,
             embedding_model=FAKE_EMBEDDING_MODEL if fake else settings.embedding_model,
-            chat_timeout_seconds=settings.chat_timeout_seconds, on_phase=show_phase,
+            chat_timeout_seconds=settings.chat_timeout_seconds,
+            tool_client=tool_client,
+            tool_timeout_seconds=settings.subscription_tool_timeout_seconds,
+            on_phase=show_phase,
         )
         _print(result)
         return _EXIT[result.status]

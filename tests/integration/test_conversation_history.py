@@ -14,6 +14,7 @@ from app.auth.policies import AuthorizationContext
 from app.db import repositories
 from app.graph.runner import run_turn
 from app.retrieval.schemas import Tier
+from app.tools.fake import FakeSubscriptionToolClient
 
 pytestmark = pytest.mark.integration
 
@@ -115,6 +116,7 @@ async def test_run_turn_feeds_prior_answered_turns_to_the_planner(
         auth=AuthorizationContext(user_id="u", tier=Tier.GENERAL),
         models=models, prompts=load_prompts("v1"), embedding_model="fake",
         chat_timeout_seconds=20.0,
+        tool_client=FakeSubscriptionToolClient(), tool_timeout_seconds=5.0,
     )
 
     planner_prompt = "\n".join(m.content for m in planner.calls[0].messages)
@@ -137,6 +139,7 @@ async def test_run_turn_does_not_see_its_own_turn_as_history(
         auth=AuthorizationContext(user_id="u", tier=Tier.GENERAL),
         models=models, prompts=load_prompts("v1"), embedding_model="fake",
         chat_timeout_seconds=20.0,
+        tool_client=FakeSubscriptionToolClient(), tool_timeout_seconds=5.0,
     )
 
     planner_prompt = "\n".join(m.content for m in planner.calls[0].messages)

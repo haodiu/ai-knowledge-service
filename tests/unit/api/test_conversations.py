@@ -11,13 +11,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import conversations as conv_module
-from app.api.dependencies import enforce_rate_limit, get_auth, get_engine, get_models, get_prompts
+from app.api.dependencies import (
+    enforce_rate_limit,
+    get_auth,
+    get_engine,
+    get_models,
+    get_prompts,
+    get_tool_client,
+)
 from app.auth.policies import AuthorizationContext
 from app.db import repositories
 from app.graph.result import TurnResult
 from app.main import create_app
 from app.retrieval.schemas import Tier
 from app.settings import Settings
+from app.tools.fake import FakeSubscriptionToolClient
 
 USER = AuthorizationContext(user_id="user-1", tier=Tier.GENERAL)
 
@@ -30,6 +38,7 @@ def client(settings: Settings) -> Iterator[TestClient]:
     app.dependency_overrides[get_engine] = lambda: object()
     app.dependency_overrides[get_models] = lambda: object()
     app.dependency_overrides[get_prompts] = lambda: object()
+    app.dependency_overrides[get_tool_client] = lambda: FakeSubscriptionToolClient()
     with TestClient(app) as c:
         yield c
 
@@ -96,6 +105,33 @@ def test_rate_limit_exceeded_is_429(client: TestClient) -> None:
     r = client.post(f"/v1/conversations/{uuid.uuid4()}/turns", json={"question": "q"})
     assert r.status_code == 429
     assert r.headers["retry-after"] == "7"
+
+
+def test_an_unconfigured_subscription_tool_does_not_crash_every_request(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: get_tool_client must return None, never raise, when
+    SUBSCRIPTION_SERVICE_BASE_URL/TOKEN are unset (no Payment/Subscription host exists yet -- the
+    `settings` fixture never sets them). Raising there would fail EVERY turn request via FastAPI's
+    dependency resolution, before the route body or the graph ever runs -- including a plain
+    'policy' question whose plan never proposes a tool. This removes the test client's usual
+    get_tool_client override so the REAL dependency runs."""
+    client.app.dependency_overrides.pop(get_tool_client)  # type: ignore[union-attr]
+    _own(monkeypatch, USER.user_id)
+    _stub_add_turn(monkeypatch)
+
+    seen: dict[str, object] = {}
+
+    async def fake_run_turn(**kwargs: object) -> TurnResult:
+        seen["tool_client"] = kwargs["tool_client"]
+        return TurnResult(status="answered", answer="Refunds within 14 days.", detail="ok")
+
+    monkeypatch.setattr(conv_module, "run_turn", fake_run_turn)
+
+    r = client.post(f"/v1/conversations/{uuid.uuid4()}/turns", json={"question": "q"})
+
+    assert r.status_code == 200  # not a 500 from an unhandled ConfigurationError
+    assert seen["tool_client"] is None  # the real get_tool_client, degrading gracefully
 
 
 def test_sse_streams_status_events_then_one_answer_event(

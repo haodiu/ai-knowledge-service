@@ -18,6 +18,8 @@ async def plan_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, Any]
         )
     except ModelError as exc:
         return {"error": to_turn_error(exc)}
-    # tool_request is recorded as a proposal only; no node executes it (Week 7, invariant #11)
+    # tool_request is recorded as a proposal here; app/graph/nodes/tools.py is the only node
+    # allowed to act on it, gated by allowlist + authorization (invariant #11) -- this node never
+    # executes it itself.
     return {"plan": plan, "proposed_tool": plan.tool_request,
             "retrieval_query": plan.retrieval_query}

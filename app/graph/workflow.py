@@ -16,6 +16,7 @@ from app.graph.nodes.evidence import grade_node, rewrite_node
 from app.graph.nodes.generation import generate_node
 from app.graph.nodes.planning import plan_node
 from app.graph.nodes.retrieval import retrieve_node
+from app.graph.nodes.tools import tool_node
 from app.graph.nodes.understand import understand_node
 from app.graph.nodes.validation import fallback_node, validate_node
 from app.graph.routing import (
@@ -23,6 +24,7 @@ from app.graph.routing import (
     route_after_grade,
     route_after_plan,
     route_after_retrieve,
+    route_after_tool,
     route_after_understand,
     route_after_validate,
 )
@@ -49,6 +51,7 @@ def build_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
     g.add_node("understand", _bind(understand_node))
     g.add_node("plan", _bind(plan_node))
     g.add_node("retrieve", _bind(retrieve_node))
+    g.add_node("tool", _bind(tool_node))
     g.add_node("grade", _bind(grade_node))
     g.add_node("rewrite", _bind(rewrite_node))
     g.add_node("generate", _bind(generate_node))
@@ -59,9 +62,13 @@ def build_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
     g.add_conditional_edges(
         "understand", route_after_understand, {"plan": "plan", "fallback": "fallback"})
     g.add_conditional_edges(
-        "plan", route_after_plan, {"retrieve": "retrieve", "fallback": "fallback"})
+        "plan", route_after_plan,
+        {"retrieve": "retrieve", "tool": "tool", "fallback": "fallback"})
     g.add_conditional_edges(
-        "retrieve", route_after_retrieve, {"grade": "grade", "fallback": "fallback"})
+        "retrieve", route_after_retrieve,
+        {"tool": "tool", "grade": "grade", "fallback": "fallback"})
+    g.add_conditional_edges(
+        "tool", route_after_tool, {"grade": "grade", "fallback": "fallback"})
     g.add_conditional_edges(
         "grade", route_after_grade,
         {"generate": "generate", "rewrite": "rewrite", "fallback": "fallback"})

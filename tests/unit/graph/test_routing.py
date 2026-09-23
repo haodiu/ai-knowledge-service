@@ -9,6 +9,7 @@ from app.graph.routing import (
     route_after_grade,
     route_after_plan,
     route_after_retrieve,
+    route_after_tool,
     route_after_understand,
     route_after_validate,
 )
@@ -20,6 +21,9 @@ CLARIFY = QueryPlan(intent="clarification", retrieval_query="x", needs_retrieval
                     clarification_question="Which plan?")
 TOOL_ONLY = QueryPlan.model_validate(
     {"intent": "subscription", "retrieval_query": "my sub", "needs_retrieval": False,
+     "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c"}}})
+HYBRID = QueryPlan.model_validate(
+    {"intent": "hybrid", "retrieval_query": "cancel policy", "needs_retrieval": True,
      "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c"}}})
 
 
@@ -33,13 +37,15 @@ def _grade(sufficient: bool, rewrite: str | None = None) -> EvidenceGrade:
 def test_plan_routes() -> None:
     assert route_after_plan({"plan": POLICY}) == "retrieve"
     assert route_after_plan({"plan": CLARIFY}) == "fallback"
-    assert route_after_plan({"plan": TOOL_ONLY}) == "fallback"  # nothing to retrieve, tool is W7
+    assert route_after_plan({"plan": TOOL_ONLY}) == "tool"  # nothing to retrieve, straight to tool
+    assert route_after_plan({"plan": HYBRID}) == "retrieve"  # tool runs AFTER retrieval (Week 7)
 
 
 def test_any_error_goes_to_fallback_from_every_router() -> None:
     err = TurnError(kind="unavailable", code="unavailable")
     assert route_after_plan({"error": err, "plan": POLICY}) == "fallback"
     assert route_after_retrieve({"error": err, "evidence": make_evidence(1)}) == "fallback"
+    assert route_after_tool({"error": err, "evidence": make_evidence(1)}) == "fallback"
     assert route_after_grade({"error": err, "grade": _grade(True)}) == "fallback"
     assert route_after_validate({"error": err, "citations_valid": True}) == "fallback"
 
@@ -65,6 +71,36 @@ def test_a_rewrite_that_finds_nothing_new_skips_the_second_grade() -> None:
 def test_a_rewrite_that_finds_something_new_is_graded_again() -> None:
     state = {"evidence": make_evidence(3), "retrieval_attempts": 2, "new_evidence_count": 1}
     assert route_after_retrieve(state) == "grade"  # type: ignore[arg-type]
+
+
+def test_a_pending_tool_request_routes_to_tool_after_retrieval() -> None:
+    state = {"plan": HYBRID, "evidence": make_evidence(1), "retrieval_attempts": 1,
+             "new_evidence_count": 1}
+    assert route_after_retrieve(state) == "tool"  # type: ignore[arg-type]
+
+
+def test_an_already_executed_tool_is_never_routed_to_again() -> None:
+    """MAX_TOOL_CALLS=1: on the rewrite loop's second retrieve, tool_executed is already True."""
+    state = {"plan": HYBRID, "tool_executed": True, "evidence": make_evidence(1),
+             "retrieval_attempts": 2, "new_evidence_count": 1}
+    assert route_after_retrieve(state) == "grade"  # type: ignore[arg-type]
+
+
+def test_a_plan_without_a_tool_request_never_routes_to_tool() -> None:
+    state = {"plan": POLICY, "evidence": make_evidence(1), "retrieval_attempts": 1,
+             "new_evidence_count": 1}
+    assert route_after_retrieve(state) == "grade"  # type: ignore[arg-type]
+
+
+# --- after tool ----------------------------------------------------------------------------
+
+
+def test_tool_routes() -> None:
+    assert route_after_tool({"evidence": make_evidence(1)}) == "grade"  # type: ignore[arg-type]
+    assert route_after_tool({"evidence": []}) == "fallback"  # type: ignore[arg-type]
+    assert route_after_tool({}) == "fallback"  # no evidence key at all
+    err = TurnError(kind="unavailable", code="tool_timeout")
+    assert route_after_tool({"error": err, "evidence": make_evidence(1)}) == "fallback"
 
 
 # --- after grade --------------------------------------------------------------------------
@@ -128,7 +164,12 @@ def test_fallback_outcomes() -> None:
     ev = make_evidence(1)
     assert fallback_outcome({"plan": CLARIFY}).status == "clarification"  # type: ignore[arg-type]
     assert fallback_outcome({"plan": CLARIFY}).clarification_question == "Which plan?"  # type: ignore[arg-type]
-    assert fallback_outcome({"plan": TOOL_ONLY}).detail == "no_retrieval_needed"  # type: ignore[arg-type]
+    # a tool_request plan is never "no_retrieval_needed": it falls through to the real reason
+    # (here: the tool never ran, so there is no evidence at all -- see test_plan_routes above).
+    # Note: after Week 7, "no_retrieval_needed" itself is unreachable from any *validated*
+    # QueryPlan (every intent that skips retrieval also either sets a tool_request or is
+    # "clarification", both handled earlier) -- the guard is defence in depth, not a live path.
+    assert fallback_outcome({"plan": TOOL_ONLY}).detail == "no_evidence"  # type: ignore[arg-type]
     assert fallback_outcome({"plan": POLICY, "evidence": []}).detail == "no_evidence"  # type: ignore[arg-type]
     blocked = fallback_outcome({"plan": POLICY, "evidence": ev, "grade": _grade(True),  # type: ignore[arg-type]
                                 "citations_valid": False})
@@ -143,6 +184,10 @@ def test_fallback_outcomes() -> None:
     invalid = fallback_outcome(  # type: ignore[arg-type]
         {"error": TurnError(kind="blocked", code="structured_output_invalid")})
     assert invalid.status == "blocked"
+    ambiguous = fallback_outcome({"error": TurnError(  # type: ignore[arg-type]
+        kind="clarification", code="tool_ambiguous", clarification_question="Which one?")})
+    assert (ambiguous.status, ambiguous.detail) == ("clarification", "tool_ambiguous")
+    assert ambiguous.clarification_question == "Which one?"
     _ = CitationRef  # imported for parity with the workflow tests
 
 

@@ -1,10 +1,12 @@
 """The Week 4 graph with fake models. Ported from the Week 3 sequential-flow specs.
 
 Ported unchanged: happy path, evidence identity, invented/wrong-version citation, clarification,
-tool-only, empty evidence, generator insufficient, tool proposal not executed, 429 (no retry when
-retry_after > 10 s), embedding failure, call count. SUPERSEDED by Week 4 policy (called out in the
-commit message): weak evidence now rewrites once (was: stop); invalid output now gets one repair
-attempt (was: blocked after one call), so those scripts carry two bad outputs.
+empty evidence, generator insufficient, 429 (no retry when retry_after > 10 s), embedding failure,
+call count. SUPERSEDED by Week 4 policy (called out in the commit message): weak evidence now
+rewrites once (was: stop); invalid output now gets one repair attempt (was: blocked after one
+call), so those scripts carry two bad outputs. SUPERSEDED by Week 7 (Plan §10, §18): tool proposals
+are now actually executed -- see the `test_tool_*`/`test_hybrid_tool_*` tests below, which replace
+the old "tool-only"/"tool proposal not executed" Week 3 specs.
 """
 import asyncio
 import random
@@ -23,6 +25,9 @@ from app.ai.schemas import AnswerDraft, CitationRef, EvidenceGrade, QueryPlan
 from app.ai.types import ModelMessage, ModelResponse, Usage
 from app.graph.result import BUG_DETAILS, KNOWN_DETAILS
 from app.retrieval.schemas import Evidence
+from app.tools.errors import ToolAmbiguous, ToolNotFound, ToolTimeout
+from app.tools.fake import FakeSubscriptionToolClient
+from app.tools.subscription import SubscriptionSnapshot, subscription_to_evidence
 from tests.unit.ai.helpers import make_evidence
 from tests.unit.graph.harness import Harness
 
@@ -101,15 +106,24 @@ async def test_right_chunk_wrong_version_blocks_the_draft() -> None:
 # --- routing/branches (ported) ------------------------------------------------------------
 
 
-async def test_valid_tool_proposal_is_reported_but_never_executed() -> None:
+async def test_hybrid_tool_proposal_is_executed_and_folded_into_evidence() -> None:
+    """Week 7: retrieve runs first, then the tool -- see app/graph/routing.py::route_after_retrieve
+    for why that order matters (build_evidence's "new is always kept" rule)."""
     plan = QueryPlan.model_validate(
         {"intent": "hybrid", "retrieval_query": "cancel policy", "needs_retrieval": True,
          "tool_request": {"name": "get_subscription", "arguments": {"subscription_id": "sub_9"}}})
     ev = make_evidence(1)
-    result = await Harness([plan], [SUFFICIENT], [_answered(_ref(ev[0]))], ev).run()
+    snapshot = SubscriptionSnapshot(
+        subscription_id="sub_9", customer_id="cus_1", status="active",
+        observed_at="2026-09-23T00:00:00Z",
+    )
+    tool = FakeSubscriptionToolClient([snapshot])
+    result = await Harness([plan], [SUFFICIENT], [_answered(_ref(ev[0]))], ev, tool=tool).run()
     assert result.status == "answered"
     assert result.proposed_tool is not None and result.proposed_tool.name == "get_subscription"
-    assert result.tool_executed is False
+    assert result.tool_executed is True
+    assert len(tool.calls) == 1 and tool.calls[0].user_id == "u1"
+    assert any(e.title == "Subscription sub_9" for e in result.evidence)
 
 
 async def test_clarification_plan_stops_before_retrieval_and_grading() -> None:
@@ -120,17 +134,72 @@ async def test_clarification_plan_stops_before_retrieval_and_grading() -> None:
     assert result.status == "clarification"
     assert result.clarification_question == "Which plan do you mean?"
     assert h.retrieve_calls == [] and h.chat_calls == 1
+    assert h.tool_calls == 0
 
 
-async def test_tool_only_plan_without_retrieval_is_insufficient_evidence() -> None:
+async def test_tool_only_plan_success_is_graded_and_answered() -> None:
     plan = QueryPlan.model_validate(
         {"intent": "subscription", "retrieval_query": "my sub", "needs_retrieval": False,
          "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c1"}}})
-    h = Harness([plan])
+    snapshot = SubscriptionSnapshot(
+        subscription_id="sub_1", customer_id="c1", status="active",
+        observed_at="2026-09-23T00:00:00Z",
+    )
+    evidence = subscription_to_evidence(snapshot, request_id="test")  # Harness's fixed request_id
+    tool = FakeSubscriptionToolClient([snapshot])
+    h = Harness([plan], [SUFFICIENT], [_answered(_ref(evidence))], tool=tool)
     result = await h.run()
-    assert result.status == "insufficient_evidence"
-    assert result.proposed_tool is not None and result.tool_executed is False
+    assert result.status == "answered" and result.detail == "ok"
+    assert result.tool_executed is True
+    assert result.citations == (_ref(evidence),)
+    assert h.retrieve_calls == []
+
+
+async def test_tool_only_plan_404_is_insufficient_evidence_without_disclosing_which() -> None:
+    """Invariant #4: a 404 (not found OR not authorized) never becomes a distinct error -- it
+    falls into the exact same `no_evidence` path an empty retrieval takes."""
+    plan = QueryPlan.model_validate(
+        {"intent": "subscription", "retrieval_query": "my sub", "needs_retrieval": False,
+         "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c1"}}})
+    tool = FakeSubscriptionToolClient([ToolNotFound()])
+    h = Harness([plan], tool=tool)
+    result = await h.run()
+    assert result.status == "insufficient_evidence" and result.detail == "no_evidence"
+    assert result.proposed_tool is not None and result.tool_executed is True
     assert h.retrieve_calls == [] and h.chat_calls == 1
+    assert len(tool.calls) == 1
+
+
+async def test_tool_409_is_a_clarification_turn() -> None:
+    plan = QueryPlan.model_validate(
+        {"intent": "subscription", "retrieval_query": "my sub", "needs_retrieval": False,
+         "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c1"}}})
+    tool = FakeSubscriptionToolClient([ToolAmbiguous("more than one match")])
+    result = await Harness([plan], tool=tool).run()
+    assert result.status == "clarification" and result.detail == "tool_ambiguous"
+    assert result.clarification_question is not None
+
+
+async def test_tool_timeout_is_temporarily_unavailable() -> None:
+    plan = QueryPlan.model_validate(
+        {"intent": "subscription", "retrieval_query": "my sub", "needs_retrieval": False,
+         "tool_request": {"name": "get_subscription", "arguments": {"customer_id": "c1"}}})
+    tool = FakeSubscriptionToolClient([ToolTimeout()])
+    result = await Harness([plan], tool=tool).run()
+    assert result.status == "temporarily_unavailable" and result.detail == "tool_timeout"
+
+
+async def test_an_unknown_tool_name_is_never_called_even_after_the_one_repair() -> None:
+    """Plan §16.3 #9: an unknown tool name fails the planner's OWN structured-output validation
+    (Pydantic rejects it before a QueryPlan naming it can even exist) -- scripted twice so the one
+    repair attempt (invariant #7) also fails, ending the turn blocked with ZERO tool calls made."""
+    bad = ('{"intent": "subscription", "retrieval_query": "x", "needs_retrieval": false, '
+           '"tool_request": {"name": "delete_subscription", "arguments": {"customer_id": "c1"}}}')
+    h = Harness([bad, bad])
+    result = await h.run()
+    assert result.status == "blocked" and result.detail == "structured_output_invalid"
+    assert h.tool_calls == 0
+    assert len(h.planner.calls) == 2  # the rejected attempt + the one repair, no more
 
 
 async def test_empty_evidence_skips_grader_and_generator() -> None:

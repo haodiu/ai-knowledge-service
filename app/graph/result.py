@@ -23,9 +23,10 @@ TurnStatus = Literal[
 #   unusable embedding                      -> temporarily_unavailable / embedding_dimension|invalid
 DETAILS_ANSWERED = frozenset({"ok"})
 DETAILS_NON_ANSWER = frozenset({
-    "planner_clarification", "generator_clarification",           # clarification
+    "planner_clarification", "generator_clarification", "tool_ambiguous",  # clarification
     "no_retrieval_needed", "no_evidence", "grader_insufficient",  # insufficient_evidence
     "rewrite_rejected", "rewrite_no_new_evidence", "generator_insufficient",
+    "tool_not_found",  # insufficient_evidence: 404 (not found or not authorized -- invariant #4)
 })
 DETAILS_BLOCKED = frozenset({
     "invalid_citations", "invalid_question", "retrieval_attempts_exceeded",
@@ -34,6 +35,9 @@ DETAILS_BLOCKED = frozenset({
 DETAILS_UNAVAILABLE = frozenset({
     "model_error", "timeout", "rate_limited", "unavailable", "budget_exhausted",
     "embedding_dimension", "embedding_invalid", "graph_timeout", "persistence_failed",
+    # subscription host (Plan §10): tool_error is ToolError's own base-class code, never raised
+    # directly (only its subclasses are), registered the same way "model_error" is above.
+    "tool_error", "tool_timeout", "tool_rate_limited", "tool_unavailable",
 })
 # Graph BUGS: reachable only through an unexpected exception or an impossible state. They are named
 # (never silent) but must never be produced by a legitimate failure; tests assert exactly that.
@@ -54,7 +58,7 @@ class TurnResult:
     plan: QueryPlan | None = None
     grade: EvidenceGrade | None = None
     proposed_tool: ToolRequest | None = None
-    tool_executed: bool = False  # always False until Week 7; a proposal is never a call
+    tool_executed: bool = False  # True once app/graph/nodes/tools.py has attempted the proposal
     retry_after_seconds: float | None = None
     detail: str = ""
     retrieval_attempts: int = 0

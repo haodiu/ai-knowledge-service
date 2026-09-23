@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy import Engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.ai.errors import ConfigurationError
 from app.ai.prompts.loader import Prompts, load_prompts
 from app.ai.registry import ModelRegistry, build_registry
 from app.auth.jwt import InvalidTokenError, verify_token
@@ -16,6 +17,7 @@ from app.auth.policies import AuthorizationContext
 from app.rate_limit.policy import RateLimiter
 from app.rate_limit.redis import RateLimitUnavailable, RedisRateLimiter
 from app.settings import Settings
+from app.tools.subscription import SubscriptionToolClient, build_tool_client
 
 # A probe raises on failure and returns None on success.
 Probe = Callable[[], Awaitable[None]]
@@ -53,6 +55,28 @@ def get_models(
         request.app.state.models = build_registry(settings)
     models: ModelRegistry = request.app.state.models
     return models
+
+
+def get_tool_client(
+    request: Request, settings: Annotated[Settings, Depends(get_settings_dep)]
+) -> SubscriptionToolClient | None:
+    """Built once, lazily, and cached on app.state (Plan §10, §18 Tuan 7).
+
+    Unlike `get_models` -- every turn needs a chat model, so failing the whole request when one
+    can't be built is correct there -- NOT every turn needs the subscription tool (only a plan
+    that proposes one does), and no Payment/Subscription host exists yet. So this never raises:
+    a missing SUBSCRIPTION_SERVICE_BASE_URL/TOKEN yields `None` here, and only turns whose plan
+    actually calls the tool see a (turn-scoped, `temporarily_unavailable`) consequence, in
+    `app/graph/nodes/tools.py`. Raising ConfigurationError here instead would fail EVERY request,
+    including ones that never touch the tool at all -- FastAPI resolves this dependency before the
+    route handler runs, so that failure would not even be a graceful HTTP error."""
+    if not hasattr(request.app.state, "tool_client"):
+        try:
+            request.app.state.tool_client = build_tool_client(settings)
+        except ConfigurationError:
+            request.app.state.tool_client = None
+    tool_client: SubscriptionToolClient | None = request.app.state.tool_client
+    return tool_client
 
 
 def get_prompts(

@@ -10,6 +10,11 @@ x-app-env: &app-env
   JWT_ISSUER: ${JWT_ISSUER:-payment-subscription-platform}
   JWT_AUDIENCE: ${JWT_AUDIENCE:-rag-chatbot}
   INGESTION_SERVICE_TOKEN: ${INGESTION_SERVICE_TOKEN:?set in .env}
+  # Week 7 subscription tool (Plan §10): optional like GEMINI_API_KEY -- no Payment/Subscription
+  # host exists yet, so these are unset by default and the tool degrades to temporarily_unavailable
+  # only for a turn that actually proposes it (app/api/dependencies.py::get_tool_client).
+  SUBSCRIPTION_SERVICE_BASE_URL: ${SUBSCRIPTION_SERVICE_BASE_URL:-}
+  SUBSCRIPTION_SERVICE_TOKEN: ${SUBSCRIPTION_SERVICE_TOKEN:-}
 
 services:
   api:

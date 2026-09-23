@@ -31,6 +31,7 @@ from app.graph.runner import run_turn
 from app.retrieval.hybrid_search import hybrid_search
 from app.retrieval.schemas import Tier
 from app.settings import Settings
+from app.tools.fake import FakeSubscriptionToolClient
 from tests.integration.conftest import make_chunk, make_document, make_version, point_active
 
 pytestmark = [pytest.mark.integration, pytest.mark.live]
@@ -111,6 +112,7 @@ async def _ask(async_engine: AsyncEngine, live_settings: Settings, question: str
         models=models, prompts=load_prompts(live_settings.prompt_version),
         embedding_model=live_settings.embedding_model,
         chat_timeout_seconds=live_settings.chat_timeout_seconds, retriever=retrieve,
+        tool_client=FakeSubscriptionToolClient(), tool_timeout_seconds=5.0,
     )
 
 

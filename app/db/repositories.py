@@ -12,6 +12,7 @@ from app.retrieval.schemas import SourceSnapshot
 
 if TYPE_CHECKING:
     from app.ai.recorder import ModelCallRecord
+    from app.tools.recorder import ToolCallRecord
 
 
 async def create_conversation(engine: AsyncEngine, user_id: str) -> uuid.UUID:
@@ -182,6 +183,20 @@ async def insert_model_call(
              "model": record.model_name, "pv": record.prompt_version, "i": record.input_tokens,
              "o": record.output_tokens, "l": record.latency_ms, "status": record.status,
              "err": record.error_code},
+        )
+
+
+async def insert_tool_call(
+    engine: AsyncEngine, turn_id: uuid.UUID, record: "ToolCallRecord"
+) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO tool_calls (turn_id, tool_name, identifier_kind, latency_ms, "
+                "status, error_code) VALUES (:t, :name, :kind, :l, :status, :err)"
+            ),
+            {"t": turn_id, "name": record.tool_name, "kind": record.identifier_kind,
+             "l": record.latency_ms, "status": record.status, "err": record.error_code},
         )
 
 

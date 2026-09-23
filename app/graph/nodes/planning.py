@@ -14,6 +14,7 @@ async def plan_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, Any]
         plan = await plan_query(
             ctx.models, ctx.recorder, ctx.prompts, state["normalized_question"],
             timeout_seconds=ctx.chat_timeout_seconds, budget=ctx.budget,
+            recent_turns=state.get("recent_turns", []),
         )
     except ModelError as exc:
         return {"error": to_turn_error(exc)}

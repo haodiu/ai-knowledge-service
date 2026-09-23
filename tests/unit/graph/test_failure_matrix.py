@@ -136,7 +136,7 @@ async def test_an_unnamed_or_inconsistent_outcome_fails_closed_as_unexpected_sta
 ) -> None:
     from app.graph import runner
 
-    async def fake_run_graph(question, ctx, *, recursion_limit):  # type: ignore[no-untyped-def]
+    async def fake_run_graph(question, ctx, *, recursion_limit, recent_turns=()):  # type: ignore[no-untyped-def]
         return state
 
     monkeypatch.setattr(runner, "run_graph", fake_run_graph)

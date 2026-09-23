@@ -132,10 +132,12 @@ async def plan_query(
     *,
     timeout_seconds: float,
     budget: TurnBudget,
+    recent_turns: Sequence[str] = (),
 ) -> QueryPlan:
     return await _call(
         models.planner, recorder, prompts, budget,
-        purpose="plan", messages=build_planner_messages(prompts, question),
+        purpose="plan",
+        messages=build_planner_messages(prompts, question, recent_turns=recent_turns),
         response_model=QueryPlan, timeout_seconds=timeout_seconds,
     )
 
@@ -166,10 +168,12 @@ async def generate_answer(
     *,
     timeout_seconds: float,
     budget: TurnBudget,
+    recent_turns: Sequence[str] = (),
 ) -> AnswerDraft:
     return await _call(
         models.answer, recorder, prompts, budget,
-        purpose="answer", messages=build_answer_messages(prompts, question, evidence),
+        purpose="answer",
+        messages=build_answer_messages(prompts, question, evidence, recent_turns=recent_turns),
         response_model=AnswerDraft, timeout_seconds=timeout_seconds,
     )
 

@@ -24,8 +24,22 @@ _TOOLS = [
 ]
 
 
-def build_planner_messages(prompts: Prompts, question: str) -> list[ModelMessage]:
+def _history_block(recent_turns: Sequence[str]) -> str:
+    """Up to MAX_HISTORY_TURNS prior Q/A pairs of THIS conversation (Plan §11.5) -- the app's own
+    persisted turns, not third-party data, so this is not evidence-injection-untrusted the way
+    retrieved chunks are. Still clearly headed/delimited so it reads as context, not instruction.
+    Empty when there is no history (a fresh conversation, or the CLI's one-shot use), so callers
+    that never pass it get byte-identical prompts to before Week 6."""
+    if not recent_turns:
+        return ""
+    return "Recent conversation (most recent last):\n" + "\n\n".join(recent_turns) + "\n\n"
+
+
+def build_planner_messages(
+    prompts: Prompts, question: str, *, recent_turns: Sequence[str] = ()
+) -> list[ModelMessage]:
     user = (
+        f"{_history_block(recent_turns)}"
         "Tools you may propose (proposals only; you cannot run them):\n"
         f"{json.dumps(_TOOLS, ensure_ascii=False)}\n\n"
         f"Question:\n{question}"
@@ -43,12 +57,15 @@ def build_grader_messages(
 
 
 def build_answer_messages(
-    prompts: Prompts, question: str, evidence: Sequence[Evidence], *, nonce: str | None = None
+    prompts: Prompts,
+    question: str,
+    evidence: Sequence[Evidence],
+    *,
+    nonce: str | None = None,
+    recent_turns: Sequence[str] = (),
 ) -> list[ModelMessage]:
-    return [
-        ModelMessage("system", prompts.answer),
-        ModelMessage("user", _user_with_evidence(question, evidence, nonce)),
-    ]
+    user = _history_block(recent_turns) + _user_with_evidence(question, evidence, nonce)
+    return [ModelMessage("system", prompts.answer), ModelMessage("user", user)]
 
 
 def _pick_nonce(requested: str | None, evidence: Sequence[Evidence]) -> str:

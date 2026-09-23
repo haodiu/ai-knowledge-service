@@ -25,6 +25,10 @@ def _settings(**over: object) -> Settings:
         "database_url": SecretStr("postgresql+psycopg://u:p@localhost:1/db"),
         "redis_url": SecretStr("redis://localhost:1/0"),
         "rabbitmq_url": SecretStr("amqp://u:p@localhost:1//"),
+        "jwt_secret": SecretStr("test-jwt-secret"),
+        "jwt_issuer": "test-issuer",
+        "jwt_audience": "test-audience",
+        "ingestion_service_token": SecretStr("test-service-token"),
     }
     base.update(over)
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]

@@ -49,6 +49,8 @@ def live_settings() -> Settings:
     return Settings(
         _env_file=None, environment="test", database_url="postgresql://x/x",  # type: ignore[arg-type]
         redis_url="redis://x", rabbitmq_url="amqp://x", gemini_api_key=KEY,  # type: ignore[arg-type]
+        jwt_secret="x", jwt_issuer="x", jwt_audience="x",  # type: ignore[arg-type]
+        ingestion_service_token="x",  # type: ignore[arg-type]
     )
 
 
@@ -94,7 +96,7 @@ def hostile_world(db_engine: Engine, live_settings: Settings) -> dict[str, objec
 
 async def _ask(async_engine: AsyncEngine, live_settings: Settings, question: str) -> TurnResult:
     models = build_registry(live_settings)
-    turn_id = await repositories.create_turn(async_engine, user_id="live-probe", question=question)
+    created = await repositories.create_turn(async_engine, user_id="live-probe", question=question)
 
     async def retrieve(query, embedding, allowed_tiers):  # type: ignore[no-untyped-def]
         return await hybrid_search(
@@ -103,7 +105,8 @@ async def _ask(async_engine: AsyncEngine, live_settings: Settings, question: str
         )
 
     return await run_turn(
-        engine=async_engine, turn_id=turn_id, question=question,
+        engine=async_engine, conversation_id=created.conversation_id, turn_id=created.turn_id,
+        question=question,
         auth=AuthorizationContext(user_id="live-probe", tier=Tier.GENERAL),
         models=models, prompts=load_prompts(live_settings.prompt_version),
         embedding_model=live_settings.embedding_model,

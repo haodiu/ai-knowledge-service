@@ -12,3 +12,6 @@ GRAPH_TIMEOUT_SECONDS = 30
 MAX_EVIDENCE_CHARS = 12_000  # context budget for the evidence block (whole chunks only)
 MAX_QUESTION_CHARS = 2_000
 GRAPH_RECURSION_LIMIT = 25  # last-resort backstop; the routing bounds bind long before this
+
+MAX_HISTORY_TURNS = 4  # Plan §11.5: "tối đa 4 turns"
+MAX_HISTORY_CHARS_PER_TURN = 500  # keeps stale conversations from crowding out current evidence

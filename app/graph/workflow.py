@@ -3,7 +3,7 @@
 Nodes are plain `async (state, ctx)` functions and routers are pure; this file only wires them.
 The graph itself holds no per-request data: the runtime context arrives via `ainvoke(context=)`.
 """
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import lru_cache
 from typing import Any
 
@@ -77,10 +77,18 @@ class GraphLoopError(Exception):
     """LangGraph's recursion backstop fired. The routing bounds should make this unreachable."""
 
 
-async def run_graph(question: str, ctx: GraphRuntimeContext, *, recursion_limit: int) -> RAGState:
+async def run_graph(
+    question: str,
+    ctx: GraphRuntimeContext,
+    *,
+    recursion_limit: int,
+    recent_turns: Sequence[str] = (),
+) -> RAGState:
     try:
         state: RAGState = await build_graph().ainvoke(  # type: ignore[assignment]
-            {"question": question}, context=ctx, config={"recursion_limit": recursion_limit}
+            {"question": question, "recent_turns": list(recent_turns)},
+            context=ctx,
+            config={"recursion_limit": recursion_limit},
         )
     except GraphRecursionError:
         raise GraphLoopError from None

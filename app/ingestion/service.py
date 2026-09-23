@@ -49,7 +49,19 @@ class IngestionError(Exception):
 
 class SupersededContentError(IngestionError):
     """Content is identical to a superseded version. Re-activating it (rollback) is not a Week 2
-    operation (Plan §12.7 / §12.6 rule 7), so it is refused rather than guessed at."""
+    operation (Plan §12.7 / §12.6 rule 7), so it is refused rather than guessed at.
+
+    `job_id`/`version_no` (Week 6) describe the `failed`/`superseded_content` audit job row that
+    was already committed before this was raised (see `_create_job_locked`) -- the HTTP ingestion
+    endpoint uses them to still return 202 + a job the caller can poll, per the Week 5 decision
+    not to give this its own HTTP error branch."""
+
+    def __init__(
+        self, message: str = "", *, job_id: uuid.UUID | None = None, version_no: int = 0
+    ) -> None:
+        super().__init__(message)
+        self.job_id = job_id
+        self.version_no = version_no
 
 
 class ActivationError(Exception):
@@ -87,13 +99,13 @@ class IngestResult:
 
 @dataclass(frozen=True)
 class JobRef:
-    """What `_create_job_locked()` hands back internally. `job_id` is None for "completed"
-    (content matched an already-active version: nothing to track) and for "rejected" (content
-    matched a superseded version: the audit job row was already written inside the same
-    transaction, un-keyed by job_id, see `_create_job_locked`). "rejected" only ever appears
-    inside this module: `create_ingestion_job()`/`ingest_document()` turn it into a raised
-    `SupersededContentError` immediately after their transaction commits -- raising while still
-    inside `engine.begin()` would roll back the audit insert this status represents."""
+    """What `_create_job_locked()` hands back internally. `job_id` is None only for "completed"
+    (content matched an already-active version: nothing to track -- no job row exists). For
+    "rejected" (content matched a superseded version), `job_id` points at the `failed`/
+    `superseded_content` audit row that was already written inside the same transaction.
+    "rejected" only ever appears inside this module: `create_ingestion_job()`/`ingest_document()`
+    turn it into a raised `SupersededContentError(job_id=...)` immediately after their transaction
+    commits -- raising while still inside `engine.begin()` would roll back the audit insert."""
 
     job_id: uuid.UUID | None
     document_id: uuid.UUID
@@ -252,7 +264,9 @@ def ingest_document(
                 )
             if job.status == "rejected":
                 assert job.rejection_reason is not None
-                raise SupersededContentError(job.rejection_reason)
+                raise SupersededContentError(
+                    job.rejection_reason, job_id=job.job_id, version_no=job.version_no
+                )
             if job.status == "completed":
                 return IngestResult(
                     job.document_id, job.version_id, job.version_no, "unchanged", job.job_id
@@ -316,7 +330,9 @@ def create_ingestion_job(
                 )
             if job.status == "rejected":
                 assert job.rejection_reason is not None
-                raise SupersededContentError(job.rejection_reason)
+                raise SupersededContentError(
+                    job.rejection_reason, job_id=job.job_id, version_no=job.version_no
+                )
             return job
         finally:
             try:
@@ -390,11 +406,12 @@ def _create_job_locked(
         reject_key = (
             f"{document_id}:{existing.version_no}:{c_hash}:{cfg_hash}:rejected:{uuid.uuid4().hex}"
         )
-        conn.execute(
+        reject_job_id = conn.execute(
             text(
                 "INSERT INTO ingestion_jobs (document_id, document_version_id, version_no, "
                 "content_hash, idempotency_key, status, error_code, completed_at) "
-                "VALUES (:d, NULL, :n, :h, :k, 'failed', 'superseded_content', now())"
+                "VALUES (:d, NULL, :n, :h, :k, 'failed', 'superseded_content', now()) "
+                "RETURNING id"
             ),
             {
                 "d": document_id,
@@ -402,12 +419,12 @@ def _create_job_locked(
                 "h": c_hash,
                 "k": reject_key,
             },
-        )
+        ).scalar_one()
         # Do NOT raise here: this is still inside the caller's `engine.begin()`, and raising out
         # of that block would roll back the audit INSERT just above. Report "rejected" instead;
         # the caller raises SupersededContentError once its transaction has committed.
         return JobRef(
-            None,
+            reject_job_id,
             document_id,
             existing.id,
             existing.version_no,

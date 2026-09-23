@@ -27,7 +27,8 @@ def s() -> Settings:
     if not KEY:
         pytest.skip("GEMINI_API_KEY not set")
     return Settings(_env_file=None, environment="test", database_url="postgresql://x/x",  # type: ignore[arg-type]
-                    redis_url="redis://x", rabbitmq_url="amqp://x")
+                    redis_url="redis://x", rabbitmq_url="amqp://x", jwt_secret="x",  # type: ignore[arg-type]
+                    jwt_issuer="x", jwt_audience="x", ingestion_service_token="x")  # type: ignore[arg-type]
 
 
 async def test_live_embedding_is_1536_dims_and_normalised(s: Settings) -> None:

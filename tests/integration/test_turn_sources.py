@@ -35,7 +35,8 @@ def _snap(**over: object) -> SourceSnapshot:
 
 
 async def _turn(engine: AsyncEngine) -> uuid.UUID:
-    return await repositories.create_turn(engine, user_id="u", question="q")
+    created = await repositories.create_turn(engine, user_id="u", question="q")
+    return created.turn_id
 
 
 def test_turn_sources_has_no_foreign_key_to_documents_versions_or_chunks(db_engine: Engine) -> None:
@@ -69,7 +70,10 @@ async def test_snapshots_are_saved_with_the_turn_and_can_be_opened_by_source_id(
     await repositories.finish_turn(
         async_engine, turn, graph_status="answered", answer="a", sources=[],
         retrieval_attempts=1, latency_ms=5, snapshots=[snap])
-    assert await repositories.get_turn_source(async_engine, turn, snap.source_id) == snap
+    opened = await repositories.get_turn_source(
+        async_engine, turn, snap.source_id, user_id="u"
+    )
+    assert opened == snap
 
 
 async def test_a_source_of_another_turn_cannot_be_opened(async_engine: AsyncEngine) -> None:
@@ -78,7 +82,29 @@ async def test_a_source_of_another_turn_cannot_be_opened(async_engine: AsyncEngi
     await repositories.finish_turn(
         async_engine, turn, graph_status="answered", answer="a", sources=[],
         retrieval_attempts=1, latency_ms=5, snapshots=[snap])
-    assert await repositories.get_turn_source(async_engine, other, snap.source_id) is None
+    opened = await repositories.get_turn_source(
+        async_engine, other, snap.source_id, user_id="u"
+    )
+    assert opened is None
+
+
+async def test_a_different_users_turn_cannot_be_opened(async_engine: AsyncEngine) -> None:
+    """Week 6: ownership is checked by user_id, not just by turn_id. Same failure shape as a
+    genuinely missing source (invariant #4) -- a 403 here would confirm the turn exists."""
+    owner_created = await repositories.create_turn(async_engine, user_id="owner", question="q")
+    snap = _snap()
+    await repositories.finish_turn(
+        async_engine, owner_created.turn_id, graph_status="answered", answer="a", sources=[],
+        retrieval_attempts=1, latency_ms=5, snapshots=[snap])
+
+    as_owner = await repositories.get_turn_source(
+        async_engine, owner_created.turn_id, snap.source_id, user_id="owner"
+    )
+    as_intruder = await repositories.get_turn_source(
+        async_engine, owner_created.turn_id, snap.source_id, user_id="someone-else"
+    )
+    assert as_owner == snap
+    assert as_intruder is None
 
 
 async def test_snapshots_survive_deleting_the_document_and_all_its_versions(
@@ -99,7 +125,10 @@ async def test_snapshots_survive_deleting_the_document_and_all_its_versions(
         conn.execute(text("DELETE FROM documents WHERE id = :d"), {"d": doc})
         assert conn.execute(text("SELECT count(*) FROM chunks")).scalar_one() == 0
 
-    assert await repositories.get_turn_source(async_engine, turn, snap.source_id) == snap
+    opened = await repositories.get_turn_source(
+        async_engine, turn, snap.source_id, user_id="u"
+    )
+    assert opened == snap
 
 
 async def test_snapshot_keeps_the_old_version_text_after_a_newer_version_activates(
@@ -124,7 +153,7 @@ async def test_snapshot_keeps_the_old_version_text_after_a_newer_version_activat
         make_chunk(conn, v2, 0, "Refunds within 30 days.", unit_vector(1))
         point_active(conn, doc, v2)
 
-    opened = await repositories.get_turn_source(async_engine, turn, snap.source_id)
+    opened = await repositories.get_turn_source(async_engine, turn, snap.source_id, user_id="u")
     assert opened is not None
     assert opened.version_no == 1 and opened.text_snapshot == "Refunds within 14 days."
     assert opened.document_version_id == v1  # not silently moved to the new active version

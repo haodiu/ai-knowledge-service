@@ -5,6 +5,11 @@ x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set in .env}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:?set in .env}
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://${RABBITMQ_USER:?set in .env}:${RABBITMQ_PASSWORD:?set in .env}@rabbitmq:5672//
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  JWT_SECRET: ${JWT_SECRET:?set in .env}
+  JWT_ISSUER: ${JWT_ISSUER:-payment-subscription-platform}
+  JWT_AUDIENCE: ${JWT_AUDIENCE:-rag-chatbot}
+  INGESTION_SERVICE_TOKEN: ${INGESTION_SERVICE_TOKEN:?set in .env}
 
 services:
   api:

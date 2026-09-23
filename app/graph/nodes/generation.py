@@ -14,6 +14,7 @@ async def generate_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, 
         draft = await generate_answer(
             ctx.models, ctx.recorder, ctx.prompts, state["normalized_question"],
             state["evidence"], timeout_seconds=ctx.chat_timeout_seconds, budget=ctx.budget,
+            recent_turns=state.get("recent_turns", []),
         )
     except ModelError as exc:
         return {"error": to_turn_error(exc)}

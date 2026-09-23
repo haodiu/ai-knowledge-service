@@ -27,10 +27,14 @@ def _turn(conn) -> str:  # type: ignore[no-untyped-def]
 
 
 def _call(conn, turn_id, **over):  # type: ignore[no-untyped-def]
-    row = {"t": turn_id, "purpose": "plan", "status": "ok", **over}
+    row = {
+        "t": turn_id, "purpose": "plan", "status": "ok",
+        "input_tokens": None, "output_tokens": None, **over,
+    }
     conn.execute(
         text("INSERT INTO model_calls (turn_id, purpose, provider, model_name, prompt_version, "
-             "latency_ms, status) VALUES (:t, :purpose, 'p', 'm', 'v1', 5, :status)"),
+             "latency_ms, status, input_tokens, output_tokens) "
+             "VALUES (:t, :purpose, 'p', 'm', 'v1', 5, :status, :input_tokens, :output_tokens)"),
         row,
     )
 
@@ -73,4 +77,35 @@ def test_deleting_a_turn_cascades_to_its_model_calls(db_engine: Engine) -> None:
 def test_model_calls_requires_an_existing_turn(db_engine: Engine) -> None:
     with pytest.raises(IntegrityError), db_engine.begin() as conn:
         _call(conn, "00000000-0000-0000-0000-000000000000")
+
+
+async def test_get_turn_usage_sums_tokens_across_all_calls_of_a_turn(
+    db_engine: Engine, async_engine: object
+) -> None:
+    """Week 6 token/cost observability (Plan §17): the run_turn() summary log line sums exactly
+    this, over what insert_model_call() already wrote -- no separate cost table."""
+    from app.db import repositories
+
+    with db_engine.begin() as conn:
+        turn = _turn(conn)
+        _call(conn, turn, purpose="plan", input_tokens=10, output_tokens=5)
+        _call(conn, turn, purpose="grade", input_tokens=20, output_tokens=None)
+        _call(conn, turn, purpose="answer", input_tokens=30, output_tokens=15)
+
+    calls, input_tokens, output_tokens = await repositories.get_turn_usage(
+        async_engine, turn  # type: ignore[arg-type]
+    )
+
+    assert (calls, input_tokens, output_tokens) == (3, 60, 20)  # NULL output_tokens counts as 0
+
+
+async def test_get_turn_usage_of_a_turn_with_no_calls_is_zero(
+    db_engine: Engine, async_engine: object
+) -> None:
+    from app.db import repositories
+
+    with db_engine.begin() as conn:
+        turn = _turn(conn)
+
+    assert await repositories.get_turn_usage(async_engine, turn) == (0, 0, 0)  # type: ignore[arg-type]
 

@@ -23,6 +23,8 @@ from app.graph.limits import (
     GRAPH_RECURSION_LIMIT,
     GRAPH_TIMEOUT_SECONDS,
     MAX_GENERATIVE_LLM_CALLS,
+    MAX_HISTORY_CHARS_PER_TURN,
+    MAX_HISTORY_TURNS,
     MAX_RETRIEVED_CHUNKS,
     MAX_TOOL_CALLS,
 )
@@ -37,10 +39,16 @@ log = logging.getLogger(__name__)
 
 
 async def invoke_graph(
-    question: str, ctx: GraphRuntimeContext, *, timeout_seconds: float = GRAPH_TIMEOUT_SECONDS
+    question: str,
+    ctx: GraphRuntimeContext,
+    *,
+    timeout_seconds: float = GRAPH_TIMEOUT_SECONDS,
+    recent_turns: Sequence[str] = (),
 ) -> RAGState:
     async with asyncio.timeout(timeout_seconds):  # invariant #7: GRAPH_TIMEOUT_SECONDS
-        return await run_graph(question, ctx, recursion_limit=GRAPH_RECURSION_LIMIT)
+        return await run_graph(
+            question, ctx, recursion_limit=GRAPH_RECURSION_LIMIT, recent_turns=recent_turns
+        )
 
 
 def _failed(status: TurnStatus, detail: str) -> TurnResult:
@@ -48,10 +56,16 @@ def _failed(status: TurnStatus, detail: str) -> TurnResult:
 
 
 async def execute_turn(
-    question: str, ctx: GraphRuntimeContext, *, timeout_seconds: float = GRAPH_TIMEOUT_SECONDS
+    question: str,
+    ctx: GraphRuntimeContext,
+    *,
+    timeout_seconds: float = GRAPH_TIMEOUT_SECONDS,
+    recent_turns: Sequence[str] = (),
 ) -> TurnResult:
     try:
-        state = await invoke_graph(question, ctx, timeout_seconds=timeout_seconds)
+        state = await invoke_graph(
+            question, ctx, timeout_seconds=timeout_seconds, recent_turns=recent_turns
+        )
     except TimeoutError:
         return _failed("temporarily_unavailable", "graph_timeout")
     except GraphLoopError:  # unreachable while the routing bounds hold; fail closed anyway
@@ -101,6 +115,7 @@ def _default_retriever(engine: AsyncEngine) -> Retriever:
 async def run_turn(
     *,
     engine: AsyncEngine,
+    conversation_id: uuid.UUID,
     turn_id: uuid.UUID,
     question: str,
     auth: AuthorizationContext,
@@ -113,6 +128,10 @@ async def run_turn(
     timeout_seconds: float = GRAPH_TIMEOUT_SECONDS,
 ) -> TurnResult:
     started = time.perf_counter()
+    recent_turns = await repositories.get_recent_turns(
+        engine, conversation_id,
+        limit=MAX_HISTORY_TURNS, max_chars_per_turn=MAX_HISTORY_CHARS_PER_TURN,
+    )
     ctx = GraphRuntimeContext(
         request_id=str(turn_id),
         auth=auth,
@@ -129,7 +148,9 @@ async def run_turn(
         chat_timeout_seconds=chat_timeout_seconds,
         on_phase=on_phase,
     )
-    result = await execute_turn(question, ctx, timeout_seconds=timeout_seconds)
+    result = await execute_turn(
+        question, ctx, timeout_seconds=timeout_seconds, recent_turns=recent_turns
+    )
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     try:
@@ -155,4 +176,19 @@ async def run_turn(
             )
         except Exception:
             log.exception("turn %s: could not record the failure either", turn_id)
+
+    # Token/cost observability (Plan §17): one summary line per turn, correlated by turn_id (the
+    # request_id). No new table -- this sums the model_calls rows insert_model_call() already
+    # wrote for this turn. Best effort: a failure here must not affect the turn's own outcome.
+    try:
+        calls, input_tokens, output_tokens = await repositories.get_turn_usage(engine, turn_id)
+        log.info(
+            "turn summary: request_id=%s conversation_id=%s status=%s detail=%s "
+            "retrieval_attempts=%d latency_ms=%d generative_calls=%d "
+            "input_tokens=%d output_tokens=%d",
+            turn_id, conversation_id, result.status, result.detail, result.retrieval_attempts,
+            latency_ms, calls, input_tokens, output_tokens,
+        )
+    except Exception:
+        log.warning("turn %s: could not summarise token usage", turn_id, exc_info=True)
     return result

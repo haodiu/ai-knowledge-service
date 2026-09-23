@@ -48,6 +48,22 @@ class Settings(BaseSettings):
     chat_timeout_seconds: float = Field(default=20.0, gt=0, le=30)
     embedding_timeout_seconds: float = Field(default=15.0, gt=0, le=30)
 
+    # --- JWT (Plan §7). HS256 shared secret with the Spring Boot host (Week 6 decision: no
+    # RS256/JWKS yet -- single trusted host, not a public multi-issuer scenario).
+    jwt_secret: SecretStr
+    jwt_issuer: str
+    jwt_audience: str
+    jwt_leeway_seconds: float = Field(default=30.0, ge=0, le=300)
+
+    # --- Redis rate limiting (Plan §13.1, §13.3). fail_open=True (Week 6 decision): Redis is an
+    # abuse-prevention control, not authz -- a Redis outage must not take down chat entirely.
+    rate_limit_requests_per_minute: int = Field(default=20, gt=0)
+    rate_limit_fail_open: bool = True
+
+    # --- Internal ingestion endpoint (Plan §6). A separate, simpler trust boundary from the user
+    # JWT above: host-to-host, no tier/AuthorizationContext involved.
+    ingestion_service_token: SecretStr
+
     @field_validator("planner_model", "grader_model", "answer_model", "embedding_model")
     @classmethod
     def _pin_model(cls, value: str) -> str:

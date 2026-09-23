@@ -74,9 +74,11 @@ async def _ask(question: str, *, tier: Tier, fake: bool) -> int:
     engine: AsyncEngine = create_engine(settings)
     turn_id = None
     try:
-        turn_id = await repositories.create_turn(engine, user_id="cli", question=question)
+        created = await repositories.create_turn(engine, user_id="cli", question=question)
+        turn_id = created.turn_id
         result = await run_turn(
-            engine=engine, turn_id=turn_id, question=question,
+            engine=engine, conversation_id=created.conversation_id, turn_id=turn_id,
+            question=question,
             auth=AuthorizationContext(user_id="cli", tier=tier),
             models=models, prompts=prompts,
             embedding_model=FAKE_EMBEDDING_MODEL if fake else settings.embedding_model,

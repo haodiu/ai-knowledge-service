@@ -83,14 +83,15 @@ async def _run(engine, *, grade, answer, plan=(POLICY,), tier=Tier.GENERAL):  # 
     answerer = (FakeChatModelClient(responder=demo_responder) if answer is None
                 else FakeChatModelClient(list(answer)))
     spy = Spy(engine)
-    turn = await repositories.create_turn(engine, user_id="u", question="refund policy?")
+    created = await repositories.create_turn(engine, user_id="u", question="refund policy?")
     result = await run_turn(
-        engine=engine, turn_id=turn, question="What is the refund policy?",
+        engine=engine, conversation_id=created.conversation_id, turn_id=created.turn_id,
+        question="What is the refund policy?",
         auth=AuthorizationContext(user_id="u", tier=tier),
         models=ModelRegistry(planner, grader, answerer, FakeEmbeddingClient()),
         prompts=load_prompts("v1"), embedding_model="fake", chat_timeout_seconds=20.0,
         retriever=spy)
-    return result, turn, spy, (planner, grader, answerer)
+    return result, created.turn_id, spy, (planner, grader, answerer)
 
 
 def _cite(chunk_id, version_id):  # type: ignore[no-untyped-def]
@@ -205,7 +206,7 @@ async def test_a_validated_answer_persists_a_snapshot_that_outlives_a_policy_upd
     with db_engine.begin() as conn:  # policy update supersedes the cited version
         conn.execute(text("UPDATE document_versions SET status = 'superseded' WHERE id = :v"),
                      {"v": snap.document_version_id})
-    opened = await repositories.get_turn_source(async_engine, turn, snap.source_id)
+    opened = await repositories.get_turn_source(async_engine, turn, snap.source_id, user_id="u")
     assert opened is not None
     assert opened.text_snapshot == cited.text and opened.version_no == cited.version_no
     assert opened.document_version_id == snap.document_version_id

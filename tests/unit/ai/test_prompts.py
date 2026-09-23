@@ -102,3 +102,25 @@ def test_answer_prompt_requires_ids_and_forbids_outside_knowledge() -> None:
     system = load_prompts("v1").answer
     assert "document_version_id" in system and "chunk_id" in system
     assert "insufficient_evidence" in system
+
+
+def test_no_recent_turns_leaves_the_prompt_byte_identical_to_before_week_6() -> None:
+    """Callers that never pass recent_turns (the CLI's one-shot use) must not see any change."""
+    prompts = load_prompts("v1")
+    with_default = build_planner_messages(prompts, "q")
+    with_empty = build_planner_messages(prompts, "q", recent_turns=[])
+    assert with_default == with_empty
+
+
+@pytest.mark.parametrize("build", [
+    lambda p, q, rt: build_planner_messages(p, q, recent_turns=rt),
+    lambda p, q, rt: build_answer_messages(p, q, make_evidence(1), recent_turns=rt),
+])
+def test_recent_turns_appear_in_the_user_message_before_the_current_question(build) -> None:  # type: ignore[no-untyped-def]
+    prompts = load_prompts("v1")
+    history = ["Q: What is the refund window?\nA: 14 days."]
+    msgs = build(prompts, "What about annual plans?", history)
+    user = msgs[-1].content
+    assert "Recent conversation" in user
+    assert "What is the refund window?" in user
+    assert user.index("What is the refund window?") < user.index("What about annual plans?")

@@ -11,4 +11,6 @@ async def understand_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str
     question = re.sub(r"\s+", " ", state.get("question", "")).strip()
     if not question or len(question) > MAX_QUESTION_CHARS:
         return {"error": TurnError(kind="blocked", code="invalid_question")}
-    return {"normalized_question": question, "recent_turns": []}
+    # recent_turns is seeded by run_graph() before this node runs (Week 6, Plan §11.5); omitting
+    # the key here leaves that seeded value untouched rather than overwriting it with [].
+    return {"normalized_question": question}

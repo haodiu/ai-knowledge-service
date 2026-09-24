@@ -69,3 +69,28 @@ async def test_redis_unavailable_fails_closed_when_configured() -> None:
     limiter = RedisRateLimiter(BrokenRedis(), requests_per_window=1, fail_open=False)  # type: ignore[arg-type]
     with pytest.raises(RateLimitUnavailable):
         await limiter.check("user-1")
+
+
+async def test_an_allowed_decision_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    limiter = RedisRateLimiter(FakeRedis(), requests_per_window=3, fail_open=True)  # type: ignore[arg-type]
+    with caplog.at_level("INFO", logger="app.rate_limit.redis"):
+        await limiter.check("user-1")
+
+    decisions = [r for r in caplog.records if r.message == "rate limit decision"]
+    assert len(decisions) == 1
+    assert decisions[0].user_id == "user-1"
+    assert decisions[0].allowed is True
+    assert decisions[0].count == 1 and decisions[0].limit == 3
+
+
+async def test_a_limited_decision_is_logged_with_retry_after(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    limiter = RedisRateLimiter(FakeRedis(), requests_per_window=1, fail_open=True)  # type: ignore[arg-type]
+    with caplog.at_level("INFO", logger="app.rate_limit.redis"):
+        await limiter.check("user-1")
+        await limiter.check("user-1")  # over quota
+
+    decisions = [r for r in caplog.records if r.message == "rate limit decision"]
+    assert [d.allowed for d in decisions] == [True, False]
+    assert decisions[1].retry_after_seconds is not None

@@ -136,6 +136,23 @@ async def test_obedient_answer_citing_a_superseded_chunk_is_blocked(
     assert result.status == "blocked" and result.answer is None
 
 
+async def test_a_real_turn_writes_exactly_one_query_embedding_call(
+    async_engine: AsyncEngine, db_engine: Engine, world: dict[str, object]
+) -> None:
+    """Week 8 (Plan §17): embed_query() records an embedding_calls row, `kind='query'`, for the
+    online path -- one row per retrieval, not silently discarded (the gap this closes: both
+    embed_query() and SyncEmbedder previously threw away provider/model_version/latency)."""
+    result, turn, *_ = await _run(async_engine, grade=[OK], answer=None)
+    assert result.status == "answered"
+
+    with db_engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT kind, status, batch_size FROM embedding_calls WHERE turn_id = :t"),
+            {"t": turn},
+        ).all()
+    assert [tuple(r) for r in rows] == [("query", "ok", 1)]
+
+
 async def test_answer_smuggling_a_tool_request_is_rejected_by_the_schema(
     async_engine: AsyncEngine, world: dict[str, object]
 ) -> None:

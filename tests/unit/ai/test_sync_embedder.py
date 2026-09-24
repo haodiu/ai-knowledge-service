@@ -32,6 +32,16 @@ def test_returns_document_vectors_as_plain_lists() -> None:
     assert client.calls[0].kind == "document"
 
 
+def test_exposes_the_wrapped_clients_provider() -> None:
+    """Week 8 (Plan §17): app.ingestion.service reads this via getattr() to record a real
+    provider in embedding_calls instead of "unknown" -- regression guard for a bug where this was
+    documented but never actually implemented (caught running a real ingest against the docker-
+    compose stack: every embedding_calls row showed provider="unknown" even for real Gemini
+    calls)."""
+    client = FakeEmbeddingClient()
+    assert _embedder(client, []).provider == client.provider == "fake"
+
+
 def test_rate_limit_is_retried_honouring_retry_after_then_succeeds() -> None:
     client = FakeEmbeddingClient(
         fail_with=[ModelRateLimited("x", retry_after_seconds=2.0),

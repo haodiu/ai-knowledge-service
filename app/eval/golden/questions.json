@@ -1,0 +1,201 @@
+[
+  {
+    "id": "docs-01",
+    "question": "How many days do I have to request a refund?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-02",
+    "question": "How long does an approved refund take to reach my payment method?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-03",
+    "question": "Can I get a refund on a gift card?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "refund-policy.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-04",
+    "question": "What happens to my account if I violate the terms of service?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-05",
+    "question": "How much advance notice do you give before a material change to the terms takes effect?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-06",
+    "question": "Am I responsible for activity on my account even if someone else performed it?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "terms-of-service.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk"
+  },
+  {
+    "id": "docs-07",
+    "question": "What is the monthly price of the Pro tier?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "subscription-tiers.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "subscription-tiers.md", "chunk_index": 0}],
+    "notes": "docs-only, single chunk (chunk 0 of the multi-chunk tiers doc)"
+  },
+  {
+    "id": "multi-01",
+    "question": "What does the Business tier include, and what happens to storage above my new limit if I downgrade to it?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "expected_citations": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "notes": "multi-chunk: tier features are in chunk 0, downgrade behaviour is in chunk 1"
+  },
+  {
+    "id": "multi-02",
+    "question": "How many API requests per day does the Business tier allow, and when does an upgrade to it take effect?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "expected_citations": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "notes": "multi-chunk: request limit is in chunk 0, upgrade timing is in chunk 1"
+  },
+  {
+    "id": "multi-03",
+    "question": "Is a tier downgrade immediate or does it wait for the next billing cycle, and how does that compare to the Free tier's daily API limit?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_chunks": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "expected_citations": [
+      {"external_id": "subscription-tiers.md", "chunk_index": 0},
+      {"external_id": "subscription-tiers.md", "chunk_index": 1}
+    ],
+    "notes": "multi-chunk: downgrade timing is in chunk 1, Free tier limit is in chunk 0"
+  },
+  {
+    "id": "kb-01",
+    "question": "Do you accept Bitcoin or other cryptocurrency as a payment method?",
+    "tier": "general",
+    "expected_type": "insufficient_evidence",
+    "notes": "out-of-KB: no document in this corpus mentions payment methods"
+  },
+  {
+    "id": "kb-02",
+    "question": "What is your company's registered office address?",
+    "tier": "general",
+    "expected_type": "insufficient_evidence",
+    "notes": "out-of-KB: no document in this corpus mentions a physical address"
+  },
+  {
+    "id": "kb-03",
+    "question": "Do you offer a student or nonprofit discount on any tier?",
+    "tier": "general",
+    "expected_type": "insufficient_evidence",
+    "notes": "out-of-KB: no document in this corpus mentions discounts"
+  },
+  {
+    "id": "internal-01",
+    "question": "What dollar amount on a single transaction triggers a manual fraud review?",
+    "tier": "general",
+    "expected_type": "insufficient_evidence",
+    "expected_chunks": [],
+    "notes": "invariant #2: general tier must never retrieve fraud-thresholds.md (internal), even though it is the best textual match for this question"
+  },
+  {
+    "id": "internal-02",
+    "question": "How long is the hold period for an account flagged for fraud review?",
+    "tier": "general",
+    "expected_type": "insufficient_evidence",
+    "expected_chunks": [],
+    "notes": "invariant #2, same probe as internal-01 against the second fraud-thresholds.md paragraph"
+  },
+  {
+    "id": "internal-03",
+    "question": "What dollar amount on a single transaction triggers a manual fraud review?",
+    "tier": "internal",
+    "expected_type": "answered",
+    "expected_chunks": [{"external_id": "fraud-thresholds.md", "chunk_index": 0}],
+    "expected_citations": [{"external_id": "fraud-thresholds.md", "chunk_index": 0}],
+    "notes": "contrast pair with internal-01: same question, internal tier CAN see the answer"
+  },
+  {
+    "id": "tool-01",
+    "question": "What plan is subscription sub_9f3a2b1c currently on?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_tool": "get_subscription",
+    "notes": "tool-required: the planner prompt (app/ai/prompts/v1/planner.md) only fills subscription_id/customer_id when the user actually wrote one -- a bare 'my subscription' question with no identifier correctly triggers clarification instead, so the identifier must be explicit in the question text. expected_type='answered' needs a real Payment/Subscription host configured (SUBSCRIPTION_SERVICE_BASE_URL/TOKEN) or --fake's scripted FakeSubscriptionToolClient (app/eval/cli.py); without either, a real run correctly shows temporarily_unavailable/tool_unavailable instead -- that is this project's documented current scope (CLAUDE.md: no such host exists yet), not a runner bug"
+  },
+  {
+    "id": "tool-02",
+    "question": "Can you tell me the subscription status for customer cus_7d4e1a09?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_tool": "get_subscription",
+    "notes": "tool-required: explicit customer_id, see tool-01's note"
+  },
+  {
+    "id": "tool-03",
+    "question": "When does the current billing period end for subscription sub_1a2b3c4d?",
+    "tier": "general",
+    "expected_type": "answered",
+    "expected_tool": "get_subscription",
+    "notes": "tool-required: explicit subscription_id, see tool-01's note"
+  },
+  {
+    "id": "ambiguous-01",
+    "question": "Can I get my money back?",
+    "tier": "general",
+    "expected_type": "clarification",
+    "notes": "ambiguous: could mean the refund policy, or the status of an already-requested refund -- a model-judgment call, not deterministic; review this one's actual result by hand"
+  },
+  {
+    "id": "ambiguous-02",
+    "question": "Tell me about the plan.",
+    "tier": "general",
+    "expected_type": "clarification",
+    "notes": "ambiguous: 'the plan' could mean tier pricing/features, or the caller's own current subscription -- a model-judgment call, review by hand"
+  },
+  {
+    "id": "ambiguous-03",
+    "question": "What are the limits?",
+    "tier": "general",
+    "expected_type": "clarification",
+    "notes": "ambiguous: API request limits, storage limits, and which tier are all unspecified -- a model-judgment call, review by hand"
+  }
+]

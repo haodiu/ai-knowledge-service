@@ -254,7 +254,7 @@ state; Celery/RabbitMQ/Redis are execution mechanisms, never state stores.
 # typecheck:     mypy
 # test:          pytest -q   # integration tests need DATABASE_URL (compose postgres is on 127.0.0.1:5434)
 # test (unit):   pytest -q tests/unit          # no broker/DB needed
-# test (e2e):    pytest -q tests/e2e            # full docker-compose stack (Week 8; dir not created yet)
+# test (e2e):    pytest -q tests/e2e            # graph-Harness full-turn scenarios (Plan §16.3, fakes only); real-stack scenarios #2/#11 live in tests/integration
 # ingest (CLI):  python -m app.ingestion.cli ingest ./documents [--embeddings gemini]   # default: fake embedder
 # ask (CLI):     python -m app.ai.cli ask "question" --tier general [--fake]   # runs the LangGraph workflow
 # test (live):   GEMINI_API_KEY=... pytest -q -m live tests/live   # real API; skipped without a key; sparing on free tier

@@ -14,6 +14,7 @@ from dataclasses import replace
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.ai.budget import TurnBudget
+from app.ai.embedding_recorder import SqlTurnEmbeddingCallRecorder
 from app.ai.prompts.loader import Prompts
 from app.ai.recorder import SqlModelCallRecorder
 from app.ai.registry import ModelRegistry
@@ -153,6 +154,7 @@ async def run_turn(
         tool_client=tool_client,
         tool_recorder=SqlToolCallRecorder(engine, turn_id),
         tool_timeout_seconds=tool_timeout_seconds,
+        embedding_recorder=SqlTurnEmbeddingCallRecorder(engine, turn_id),
         on_phase=on_phase,
     )
     result = await execute_turn(
@@ -190,11 +192,18 @@ async def run_turn(
     try:
         calls, input_tokens, output_tokens = await repositories.get_turn_usage(engine, turn_id)
         log.info(
-            "turn summary: request_id=%s conversation_id=%s status=%s detail=%s "
-            "retrieval_attempts=%d latency_ms=%d generative_calls=%d "
-            "input_tokens=%d output_tokens=%d",
-            turn_id, conversation_id, result.status, result.detail, result.retrieval_attempts,
-            latency_ms, calls, input_tokens, output_tokens,
+            "turn summary",
+            extra={
+                "turn_id": str(turn_id),
+                "conversation_id": str(conversation_id),
+                "status": result.status,
+                "detail": result.detail,
+                "retrieval_attempts": result.retrieval_attempts,
+                "latency_ms": latency_ms,
+                "generative_calls": calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
         )
     except Exception:
         log.warning("turn %s: could not summarise token usage", turn_id, exc_info=True)

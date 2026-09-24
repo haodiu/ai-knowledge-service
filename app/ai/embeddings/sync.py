@@ -31,6 +31,11 @@ class SyncEmbedder:
         jitter: Callable[[], float] = lambda: random.uniform(0.0, 0.25),
     ) -> None:
         self._client = client
+        # Public, not private: app.ingestion.service reads this (via getattr, since a bare
+        # Embedder function -- e.g. app.ingestion.fake_embedder.fake_embed -- has no such
+        # attribute) to record a real provider name in embedding_calls (Plan §17) instead of
+        # "unknown".
+        self.provider = client.provider
         self._model_version = model_version
         self._kind: EmbeddingKind = kind
         self._max_attempts = max_attempts

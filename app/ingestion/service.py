@@ -20,6 +20,7 @@ reimplement it (Plan §12.8: "CLI không được có pipeline riêng khác Cele
 """
 import hashlib
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,9 +29,11 @@ from typing import Literal
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import OperationalError
 
+from app.ai.embedding_recorder import EmbeddingCallRecord
 from app.ai.errors import ModelTimeout, ModelUnavailable
 from app.db.models import EMBEDDING_DIM
 from app.ingestion.chunking import CHUNKING_VERSION, chunk_text
+from app.ingestion.embedding_recorder import SqlSyncEmbeddingCallRecorder
 from app.ingestion.indexing import content_hash, index_config_hash, replace_chunks
 from app.retrieval.schemas import Tier
 
@@ -536,6 +539,7 @@ class _JobContext:
     version_id: uuid.UUID
     external_id: str
     content: str
+    embedding_model: str
 
 
 def _job_status(engine: Engine, job_id: uuid.UUID) -> str | None:
@@ -553,7 +557,7 @@ def _load_job_context(engine: Engine, job_id: uuid.UUID) -> _JobContext:
     with engine.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT dv.id AS version_id, d.external_id, dv.content "
+                "SELECT dv.id AS version_id, d.external_id, dv.content, dv.embedding_model "
                 "FROM ingestion_jobs j "
                 "JOIN documents d ON d.id = j.document_id "
                 "JOIN document_versions dv ON dv.id = j.document_version_id "
@@ -561,7 +565,7 @@ def _load_job_context(engine: Engine, job_id: uuid.UUID) -> _JobContext:
             ),
             {"j": job_id},
         ).one()
-    return _JobContext(row.version_id, row.external_id, row.content)
+    return _JobContext(row.version_id, row.external_id, row.content, row.embedding_model)
 
 
 def _process_locked(engine: Engine, job_id: uuid.UUID, *, embed: Embedder) -> None:
@@ -579,10 +583,45 @@ def _process_locked(engine: Engine, job_id: uuid.UUID, *, embed: Embedder) -> No
             ),
             {"j": job_id},
         )
+        # A prior attempt on THIS SAME job may have left the version 'failed' (see the transient
+        # branch below): activate_version() only accepts a 'building' one, so a retry -- automatic
+        # (Celery's autoretry_for) or manual (app.ingestion.cli's retry-failed, which does the
+        # equivalent reset explicitly) -- must reset it back before trying again. A no-op when the
+        # version is already 'building' (the common case: first attempt, or superseded-by-a-newer-
+        # job never reaches here since that job is already terminal).
+        conn.execute(
+            text(
+                "UPDATE document_versions SET status = 'building' "
+                "WHERE id = :v AND status = 'failed'"
+            ),
+            {"v": ctx.version_id},
+        )
 
     chunks = chunk_text(ctx.content)
+    embed_recorder = SqlSyncEmbeddingCallRecorder(engine, job_id)
+    # Not every Embedder (the plain Callable[[list[str]], list[list[float]]] this module expects)
+    # self-identifies -- only ones wrapping a real EmbeddingClient (app.ai.embeddings.sync.
+    # SyncEmbedder) do. A bare test function (e.g. app.ingestion.fake_embedder.fake_embed) records
+    # as "unknown" rather than a guessed provider name.
+    embed_provider = getattr(embed, "provider", "unknown")
     try:
-        vectors = embed(chunks)  # slow/remote: deliberately outside any DB transaction
+        started = time.perf_counter()
+        try:
+            vectors = embed(chunks)  # slow/remote: deliberately outside any DB transaction
+        except Exception as exc:
+            embed_recorder.record(
+                EmbeddingCallRecord(
+                    "document", embed_provider, ctx.embedding_model, len(chunks),
+                    int((time.perf_counter() - started) * 1000), "error", _error_code(exc),
+                )
+            )
+            raise
+        embed_recorder.record(
+            EmbeddingCallRecord(
+                "document", embed_provider, ctx.embedding_model, len(chunks),
+                int((time.perf_counter() - started) * 1000), "ok", None,
+            )
+        )
         if len(vectors) != len(chunks) or any(len(v) != EMBEDDING_DIM for v in vectors):
             raise IngestionError(
                 f"embedder must return {len(chunks)} vectors of {EMBEDDING_DIM} floats"
@@ -645,6 +684,23 @@ def _mark_job(
             )
     except Exception:
         _LOG.warning("could not mark job %s as %s", job_id, status, exc_info=True)
+
+
+def mark_job_retries_exhausted(
+    engine: Engine, job_id: uuid.UUID, *, error_code: str = "retries_exhausted"
+) -> None:
+    """Terminal transition for a job whose Celery retries are exhausted (Plan §12.5).
+
+    `_process_locked()` marks each transient attempt `retrying` (bumping `retry_count`) and raises
+    `TransientIngestionError`; nothing transitions the job to `failed` once
+    `app.ingestion.tasks.ingest_document_task`'s `max_retries` is used up, so without this a job
+    whose transient failures never clear is stuck at `retrying` forever. Called from that task's
+    `on_failure` hook, only when the final exception is a `TransientIngestionError` -- a permanent
+    failure already self-marks `failed` inside `_process_locked()` and must not be double-handled.
+    Best effort, same shape as `_mark_job`: a failure recording the failure must not mask the
+    original error.
+    """
+    _mark_job(engine, job_id, status="failed", error_code=error_code)
 
 
 def _get_or_create_document(

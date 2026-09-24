@@ -6,6 +6,13 @@ x-app-env: &app-env
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://${RABBITMQ_USER:?set in .env}:${RABBITMQ_PASSWORD:?set in .env}@rabbitmq:5672//
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  # LLM role pins (Plan §11.4). Fallbacks here must match app/settings.py's own defaults --
+  # an empty override would make Settings() raise "model name must not be blank" on every boot,
+  # so these are never left as `:-` (empty); set the var in .env only to actually override.
+  PLANNER_MODEL: ${PLANNER_MODEL:-gemini-3.1-flash-lite}
+  GRADER_MODEL: ${GRADER_MODEL:-gemini-3.1-flash-lite}
+  ANSWER_MODEL: ${ANSWER_MODEL:-gemini-3.6-flash}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
   JWT_SECRET: ${JWT_SECRET:?set in .env}
   JWT_ISSUER: ${JWT_ISSUER:-payment-subscription-platform}
   JWT_AUDIENCE: ${JWT_AUDIENCE:-rag-chatbot}

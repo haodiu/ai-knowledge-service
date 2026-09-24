@@ -20,7 +20,7 @@ async def retrieve_node(state: RAGState, ctx: GraphRuntimeContext) -> dict[str, 
     query = state["retrieval_query"]
     try:
         vector = await embed_query(
-            ctx.models, ctx.budget, query, model_version=ctx.embedding_model
+            ctx.models, ctx.embedding_recorder, ctx.budget, query, model_version=ctx.embedding_model
         )
     except ModelError as exc:
         return {"error": to_turn_error(exc)}

@@ -48,6 +48,17 @@ class RedisRateLimiter:
             raise RateLimitUnavailable("rate limiter backend unavailable") from None
 
         if count <= self._limit:
+            _LOG.info(
+                "rate limit decision",
+                extra={"user_id": user_id, "count": count, "limit": self._limit, "allowed": True},
+            )
             return RateLimitDecision(allowed=True)
         retry_after = _WINDOW_SECONDS - (int(now) % _WINDOW_SECONDS)
+        _LOG.info(
+            "rate limit decision",
+            extra={
+                "user_id": user_id, "count": count, "limit": self._limit, "allowed": False,
+                "retry_after_seconds": retry_after,
+            },
+        )
         return RateLimitDecision(allowed=False, retry_after_seconds=float(retry_after))

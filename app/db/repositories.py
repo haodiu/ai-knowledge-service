@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.retrieval.schemas import SourceSnapshot
 
 if TYPE_CHECKING:
+    from app.ai.embedding_recorder import EmbeddingCallRecord
     from app.ai.recorder import ModelCallRecord
     from app.tools.recorder import ToolCallRecord
 
@@ -197,6 +198,27 @@ async def insert_tool_call(
             ),
             {"t": turn_id, "name": record.tool_name, "kind": record.identifier_kind,
              "l": record.latency_ms, "status": record.status, "err": record.error_code},
+        )
+
+
+async def insert_embedding_call(
+    engine: AsyncEngine, *, turn_id: uuid.UUID, record: "EmbeddingCallRecord"
+) -> None:
+    """Online (query-embedding) path only -- the offline/ingestion path uses the sync
+    `app.ingestion.embedding_recorder.SqlSyncEmbeddingCallRecorder` instead, since
+    `app.ingestion.service` is sync throughout."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO embedding_calls (turn_id, kind, provider, model_version, "
+                "batch_size, latency_ms, status, error_code) "
+                "VALUES (:t, :kind, :provider, :mv, :batch, :l, :status, :err)"
+            ),
+            {
+                "t": turn_id, "kind": record.kind, "provider": record.provider,
+                "mv": record.model_version, "batch": record.batch_size,
+                "l": record.latency_ms, "status": record.status, "err": record.error_code,
+            },
         )
 
 

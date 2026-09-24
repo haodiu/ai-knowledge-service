@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     rabbitmq_url: SecretStr  # amqp://user:pass@host:5672//
 
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
+    log_level: str = "INFO"  # Plan §17: structured JSON logging (app.logging_setup), stdlib only
 
     # --- LLM roles (Plan §11.4). Exact, confirmed names; change by config, never in the graph.
     chat_provider: str = "gemini"  # label recorded in model_calls.provider

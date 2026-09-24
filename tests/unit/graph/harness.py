@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.ai.chat.fake import FakeChatModelClient
+from app.ai.embedding_recorder import InMemoryEmbeddingCallRecorder
 from app.ai.embeddings.fake import FakeEmbeddingClient
 from app.ai.prompts.loader import load_prompts
 from app.ai.recorder import InMemoryModelCallRecorder
@@ -38,6 +39,7 @@ class Harness:
         self.tier = tier
         self.tool_client = FakeSubscriptionToolClient() if tool is _UNSET else tool
         self.tool_recorder = InMemoryToolCallRecorder()
+        self.embedding_recorder = InMemoryEmbeddingCallRecorder()
 
     async def _retrieve(self, query, embedding, allowed_tiers):  # type: ignore[no-untyped-def]
         self.retrieve_calls.append((query, len(embedding), tuple(allowed_tiers)))
@@ -61,6 +63,7 @@ class Harness:
             tool_client=self.tool_client,
             tool_recorder=self.tool_recorder,
             tool_timeout_seconds=5.0,
+            embedding_recorder=self.embedding_recorder,
             on_phase=self._on_phase,
         )
 

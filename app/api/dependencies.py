@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated
@@ -18,6 +19,8 @@ from app.rate_limit.policy import RateLimiter
 from app.rate_limit.redis import RateLimitUnavailable, RedisRateLimiter
 from app.settings import Settings
 from app.tools.subscription import SubscriptionToolClient, build_tool_client
+
+_LOG = logging.getLogger(__name__)
 
 # A probe raises on failure and returns None on success.
 Probe = Callable[[], Awaitable[None]]
@@ -157,11 +160,35 @@ def get_probes(
     async def redis_ping() -> None:
         await redis.ping()
 
+    def _log_queue_depth(conn: Connection) -> None:
+        """Plan §17: "RabbitMQ queue depth và unacked messages" -- log-only, piggybacked on the
+        readiness probe's already-open connection (no new poller/exporter). Never affects
+        /readyz's pass/fail: a failure here is swallowed, since the connection itself already
+        proved the broker is reachable, which is all readiness needs."""
+        try:
+            # Local import (same reason app.ingestion.cli's dispatch helper gives): importing
+            # app.worker.celery_app at module level would build a Celery app from get_settings()
+            # at THIS module's import time, not from the `settings` this probe was built with.
+            from app.worker.celery_app import INGESTION_QUEUE
+
+            result = conn.channel().queue_declare(queue=INGESTION_QUEUE, passive=True)
+            _LOG.info(
+                "rabbitmq queue depth",
+                extra={
+                    "queue": INGESTION_QUEUE,
+                    "message_count": result.message_count,
+                    "consumer_count": result.consumer_count,
+                },
+            )
+        except Exception:
+            _LOG.warning("could not read rabbitmq queue depth", exc_info=True)
+
     def _amqp_connect() -> None:
         # kombu is blocking; run in a thread. No retries: a probe must answer fast.
         timeout = settings.health_check_timeout_seconds
         with Connection(settings.rabbitmq_url.get_secret_value(), connect_timeout=timeout) as conn:
             conn.ensure_connection(max_retries=0, timeout=timeout)
+            _log_queue_depth(conn)
 
     async def rabbitmq() -> None:
         await asyncio.to_thread(_amqp_connect)

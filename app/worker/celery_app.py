@@ -1,5 +1,7 @@
 from celery import Celery
+from celery.signals import after_setup_logger, after_setup_task_logger
 
+from app.logging_setup import configure_logging
 from app.settings import get_settings
 
 # No result backend (Plan §0: job state lives in PostgreSQL, in `ingestion_jobs` -- never in
@@ -22,3 +24,12 @@ celery_app.conf.update(
 # Lazy: Celery imports app.ingestion.tasks (which imports `celery_app` from this module) only once
 # the app is finalized, not at module-load time -- avoids a circular import at startup.
 celery_app.autodiscover_tasks(["app.ingestion"])
+
+
+# Plan §17: structured JSON logging for the worker process too (Week 8). Hooked via Celery's own
+# setup signals, not called at import time here, so this does not fight Celery's logging bootstrap
+# (which runs its own dictConfig-style setup before these signals fire, then hands control back).
+@after_setup_logger.connect  # type: ignore[untyped-decorator]  # celery is untyped
+@after_setup_task_logger.connect  # type: ignore[untyped-decorator]
+def _configure_worker_logging(**kwargs: object) -> None:
+    configure_logging(get_settings())

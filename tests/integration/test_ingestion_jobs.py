@@ -22,6 +22,7 @@ from app.ingestion.service import (
     TransientIngestionError,
     activate_version,
     create_ingestion_job,
+    mark_job_retries_exhausted,
     run_ingestion_job,
 )
 from app.retrieval.schemas import Tier
@@ -102,6 +103,29 @@ def test_run_ingestion_job_twice_does_not_duplicate_chunks_or_reactivate(db_engi
     assert _job_row(db_engine, job.job_id)["status"] == "completed"
 
 
+def test_successful_ingest_writes_exactly_one_document_embedding_call(db_engine: Engine) -> None:
+    """Week 8 (Plan §17): the offline path records an embedding_calls row too, `kind='document'`,
+    `batch_size == len(chunks)` -- SyncEmbedder previously discarded provider/model_version/
+    latency entirely."""
+    job = _create(db_engine)
+    assert job.job_id is not None
+
+    run_ingestion_job(db_engine, job.job_id, embed=fake_embed)
+
+    with db_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT kind, status, batch_size, provider "
+                "FROM embedding_calls WHERE ingestion_job_id = :j"
+            ),
+            {"j": job.job_id},
+        ).all()
+        chunk_count = conn.execute(text("SELECT count(*) FROM chunks")).scalar_one()
+    assert len(rows) == 1
+    assert (rows[0].kind, rows[0].status, rows[0].batch_size) == ("document", "ok", chunk_count)
+    assert rows[0].provider == "unknown"  # fake_embed is a bare function, not an EmbeddingClient
+
+
 def _knowledge_version(engine: Engine) -> int:
     with engine.connect() as conn:
         kv: int = conn.execute(
@@ -150,6 +174,33 @@ def test_transient_failure_marks_job_retrying_and_raises_transient_error(
     row = _job_row(db_engine, job.job_id)
     assert row["status"] == "retrying"
     assert row["retry_count"] == 1
+
+
+def test_transient_failure_exhausting_retries_marks_job_failed(db_engine: Engine) -> None:
+    """Week 8, scenario #2 prerequisite: once a job's Celery retries are exhausted, it must reach a
+    terminal `failed` state, not stay `retrying` forever. `mark_job_retries_exhausted()` is what
+    `app.ingestion.tasks`'s `on_failure` hook calls to make that true."""
+    job = _create(db_engine)
+    assert job.job_id is not None
+
+    def boom(texts: list[str]) -> list[list[float]]:
+        raise ModelUnavailable("down", retryable=True)
+
+    with pytest.raises(TransientIngestionError):
+        run_ingestion_job(db_engine, job.job_id, embed=boom)
+    assert _job_row(db_engine, job.job_id)["status"] == "retrying"
+
+    mark_job_retries_exhausted(db_engine, job.job_id)
+
+    row = _job_row(db_engine, job.job_id)
+    assert row["status"] == "failed"
+    assert row["error_code"] == "retries_exhausted"
+    assert row["completed_at"] is not None
+
+    versions_before, chunks_before = _counts(db_engine)
+    run_ingestion_job(db_engine, job.job_id, embed=fake_embed)  # stray redelivery after exhaustion
+    assert _counts(db_engine) == (versions_before, chunks_before)
+    assert _job_row(db_engine, job.job_id)["status"] == "failed"  # still failed, not reprocessed
 
 
 def test_db_operational_error_during_processing_is_transient(db_engine: Engine) -> None:

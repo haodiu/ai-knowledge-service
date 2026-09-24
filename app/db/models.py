@@ -322,3 +322,39 @@ class ToolCall(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=_NOW
     )
+
+
+class EmbeddingCall(Base):
+    """Metadata of one embedding call, online (query) or offline (document, during ingestion).
+
+    Structural twin of `ModelCall`, with one difference: embeddings happen on two independent
+    paths with two different owners, so exactly one of `turn_id`/`ingestion_job_id` is set (Plan
+    §17, §18 Week 8) -- never both, never neither. No `estimated_cost` column, matching
+    `ModelCall`'s own precedent: pricing has exactly one home, the eval runner's pricing table."""
+
+    __tablename__ = "embedding_calls"
+    __table_args__ = (
+        CheckConstraint("kind IN ('document', 'query')", name="kind"),
+        CheckConstraint("status IN ('ok', 'error')", name="status"),
+        CheckConstraint(
+            "(turn_id IS NULL) <> (ingestion_job_id IS NULL)", name="exactly_one_owner"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("turns.id", ondelete="CASCADE")
+    )
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ingestion_jobs.id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model_version: Mapped[str] = mapped_column(Text, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=_NOW
+    )

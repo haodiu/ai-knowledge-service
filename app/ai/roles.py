@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.ai.budget import TurnBudget
 from app.ai.chat.base import ChatModelClient
+from app.ai.embedding_recorder import EmbeddingCallRecord, EmbeddingCallRecorder
 from app.ai.errors import (
     ModelError,
     ModelRateLimited,
@@ -179,20 +180,42 @@ async def generate_answer(
 
 
 async def embed_query(
-    models: ModelRegistry, budget: TurnBudget, text: str, *, model_version: str
+    models: ModelRegistry,
+    recorder: EmbeddingCallRecorder,
+    budget: TurnBudget,
+    text: str,
+    *,
+    model_version: str,
 ) -> list[float]:
     """Embed the retrieval query. Not a generative call, so it does not use the pool, but it is
-    bounded the same way: one transient retry, only if it fits in the remaining deadline."""
+    bounded the same way: one transient retry, only if it fits in the remaining deadline. Every
+    attempt, failed or not, leaves one embedding_calls row (Plan §17) -- the same "record every
+    attempt" discipline `_call()` follows for chat calls."""
     for attempt in (1, 2):
+        started = time.perf_counter()
         try:
             response = await models.embeddings.embed(
                 [text], model_version=model_version, kind="query"
             )
-            return response.vectors[0]
         except ModelError as exc:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            await recorder.record(
+                EmbeddingCallRecord(
+                    "query", models.embeddings.provider, model_version, 1, elapsed, "error",
+                    exc.code,
+                )
+            )
             delay = _transient_delay(exc)
             if attempt == 2 or delay is None or not _affordable(delay, budget):
                 raise
             if delay > 0:
                 await budget.sleep(delay)
+            continue
+        elapsed = int((time.perf_counter() - started) * 1000)
+        await recorder.record(
+            EmbeddingCallRecord(
+                "query", response.provider, response.model_version, 1, elapsed, "ok", None,
+            )
+        )
+        return response.vectors[0]
     raise AssertionError("unreachable")  # pragma: no cover

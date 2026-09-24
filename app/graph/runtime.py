@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.ai.budget import TurnBudget
+from app.ai.embedding_recorder import EmbeddingCallRecorder
 from app.ai.prompts.loader import Prompts
 from app.ai.recorder import ModelCallRecorder
 from app.ai.registry import ModelRegistry
@@ -39,6 +40,7 @@ class GraphRuntimeContext:
     tool_client: SubscriptionToolClient | None
     tool_recorder: ToolCallRecorder
     tool_timeout_seconds: float
+    embedding_recorder: EmbeddingCallRecorder
     on_phase: PhaseCallback | None = None
 
     async def emit(self, phase: Phase) -> None:

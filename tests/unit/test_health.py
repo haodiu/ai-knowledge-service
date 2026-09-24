@@ -1,9 +1,11 @@
 import asyncio
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import dependencies as deps_module
 from app.api.dependencies import Probe, get_probes
 from app.main import create_app
 from app.settings import Settings
@@ -85,3 +87,67 @@ def test_readyz_never_leaks_error_details(client_with: Callable[..., TestClient]
     r = client_with({"postgres": boom, "rabbitmq": ok, "redis": ok}).get("/readyz")
     assert "secret" not in r.text
     assert "refused" not in r.text
+
+
+class _FakeQueueResult:
+    message_count = 7
+    consumer_count = 1
+
+
+class _FakeAmqpChannel:
+    def queue_declare(self, queue: str, passive: bool) -> _FakeQueueResult:
+        return _FakeQueueResult()
+
+
+class _FakeAmqpConnection:
+    """Stands in for kombu.Connection: just enough of its context-manager/channel surface for
+    _log_queue_depth() (app.api.dependencies) to run against, with no real broker."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def __enter__(self) -> "_FakeAmqpConnection":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def ensure_connection(self, **kwargs: object) -> None:
+        pass
+
+    def channel(self) -> _FakeAmqpChannel:
+        return _FakeAmqpChannel()
+
+
+async def test_rabbitmq_probe_logs_queue_depth_without_affecting_pass_fail(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """B.6 (Plan §17): "RabbitMQ queue depth và unacked messages", piggybacked on the readiness
+    probe's already-open connection -- log-only, must never change /readyz's pass/fail."""
+    monkeypatch.setattr(deps_module, "Connection", _FakeAmqpConnection)
+    probes = get_probes(settings, object(), object())  # type: ignore[arg-type]
+
+    with caplog.at_level("INFO", logger="app.api.dependencies"):
+        await probes["rabbitmq"]()  # must not raise
+
+    logs = [r for r in caplog.records if r.message == "rabbitmq queue depth"]
+    assert len(logs) == 1
+    assert logs[0].message_count == 7  # type: ignore[attr-defined]
+    assert logs[0].consumer_count == 1  # type: ignore[attr-defined]
+
+
+async def test_a_failure_reading_queue_depth_does_not_fail_the_probe(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BoomChannel:
+        def queue_declare(self, queue: str, passive: bool) -> Any:
+            raise ConnectionError("queue not found")
+
+    class _ConnectionWithBoomChannel(_FakeAmqpConnection):
+        def channel(self) -> _BoomChannel:
+            return _BoomChannel()
+
+    monkeypatch.setattr(deps_module, "Connection", _ConnectionWithBoomChannel)
+    probes = get_probes(settings, object(), object())  # type: ignore[arg-type]
+
+    await probes["rabbitmq"]()  # queue_declare failing must not surface as a probe failure

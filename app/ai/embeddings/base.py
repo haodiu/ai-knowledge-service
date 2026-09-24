@@ -19,6 +19,11 @@ class EmbeddingResponse:
 
 
 class EmbeddingClient(Protocol):
+    # Mirrors ChatModelClient.provider (Plan §17): both real implementations already carry it;
+    # declaring it here lets embed_query() record a provider on an error path too, before any
+    # EmbeddingResponse exists to read one from.
+    provider: str
+
     async def embed(
         self, texts: Sequence[str], *, model_version: str, kind: EmbeddingKind
     ) -> EmbeddingResponse:

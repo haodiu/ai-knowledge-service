@@ -104,12 +104,19 @@ def test_real_turn_emits_only_status_events_then_one_validated_answer(
         events = _parse_sse(list(r.iter_lines()))
 
     names = [name for name, _ in events]
-    assert names == ["status", "status", "status", "status", "answer", "done"]
+    assert names[:4] == ["status", "status", "status", "status"]
+    assert names[-2:] == ["answer", "done"]
+    # Everything between the status events and the terminal `answer` is answer_chunk (progressive
+    # delivery of the already-validated text -- Plan §11.8 addendum).
+    assert names[4:-2] == ["answer_chunk"] * len(names[4:-2])
     assert [data["phase"] for _, data in events[:4]] == [
         "planning", "retrieving", "grading", "generating",
     ]
-    answer_event = events[4][1]
+    answer_event = events[-2][1]
     assert answer_event["answer"]  # demo_responder's deterministic answer text
+    chunk_events = [data for name, data in events if name == "answer_chunk"]
+    assert chunk_events  # demo_responder's answer is non-empty, so at least one chunk was sent
+    assert "".join(str(c["delta"]) for c in chunk_events) == answer_event["answer"]
     citations = answer_event["citations"]
     assert isinstance(citations, list) and len(citations) == 1
     assert citations[0]["version_no"] == 1

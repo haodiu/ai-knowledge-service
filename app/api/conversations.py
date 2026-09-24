@@ -8,6 +8,7 @@ module streams before that point can be an unvalidated draft -- there is no draf
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -74,6 +75,23 @@ async def create_conversation(
 
 def _sse(event: str, data: dict[str, object]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+_ANSWER_CHUNK_WORDS = 4  # UX pacing knob only, not a correctness/security limit
+
+
+def _answer_chunks(text: str, words_per_chunk: int = _ANSWER_CHUNK_WORDS) -> list[str]:
+    """Split an already-validated answer into small pieces for progressive `answer_chunk` SSE
+    delivery. Concatenating every returned chunk reproduces `text` exactly.
+
+    Only ever called on `result.answer` after `run_turn()` has returned (invariant #8: nothing
+    unvalidated is in scope by that point, per this module's own docstring) -- this changes how
+    an already-validated string is delivered, it never exposes anything earlier or unvalidated.
+    """
+    tokens = re.findall(r"\S+\s*", text)  # each token = one word + its trailing whitespace
+    return [
+        "".join(tokens[i : i + words_per_chunk]) for i in range(0, len(tokens), words_per_chunk)
+    ]
 
 
 # Every TurnStatus maps to exactly one terminal SSE event name (Plan §11.8's `event: answer` is
@@ -155,6 +173,12 @@ async def _stream_turn(
         yield _sse("unavailable", {"detail": "internal_error"})
         yield _sse("done", {})
         return
+    if result.status == "answered" and result.answer:
+        # Progressive delivery of an already-validated string (Plan §11.8 addendum) -- the
+        # `answer` event below still carries the full text + citations exactly as before, so a
+        # client that ignores `answer_chunk` behaves identically to today.
+        for delta in _answer_chunks(result.answer):
+            yield _sse("answer_chunk", {"delta": delta})
     yield _sse(_RESULT_EVENT[result.status], _result_payload(result))
     yield _sse("done", {})
 

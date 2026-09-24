@@ -155,11 +155,14 @@ def test_sse_streams_status_events_then_one_answer_event(
         events = _parse_sse(list(r.iter_lines()))
 
     names = [name for name, _ in events]
-    assert names == ["status", "status", "status", "status", "answer", "done"]
+    assert names == ["status", "status", "status", "status", "answer_chunk", "answer", "done"]
     assert [data["phase"] for _, data in events[:4]] == [
         "planning", "retrieving", "grading", "generating",
     ]
-    assert events[4][1]["answer"] == "Refunds within 14 days."
+    chunk_events = [data for name, data in events if name == "answer_chunk"]
+    answer_event = next(data for name, data in events if name == "answer")
+    assert "".join(str(c["delta"]) for c in chunk_events) == "Refunds within 14 days."
+    assert answer_event["answer"] == "Refunds within 14 days."
 
 
 def test_sse_never_emits_answer_before_status_events_finish(
@@ -186,6 +189,27 @@ def test_sse_never_emits_answer_before_status_events_finish(
 
     assert order == ["phase-sent"]  # run_turn finished before the generator read the result
     assert [name for name, _ in events] == ["status", "insufficient_evidence", "done"]
+
+
+def test_answer_chunks_concatenate_back_to_the_original_text() -> None:
+    text = "Nhân viên có thành tích xuất sắc, sáng kiến cải tiến quy trình sẽ được khen thưởng."
+    chunks = conv_module._answer_chunks(text)
+    assert "".join(chunks) == text
+
+
+def test_answer_chunks_of_empty_text_is_empty() -> None:
+    assert conv_module._answer_chunks("") == []
+
+
+def test_answer_chunks_shorter_than_one_group_is_a_single_chunk() -> None:
+    assert conv_module._answer_chunks("Có.", words_per_chunk=4) == ["Có."]
+
+
+def test_answer_chunks_count_matches_word_grouping() -> None:
+    text = " ".join(f"word{i}" for i in range(10))  # 10 words, groups of 4 -> 3 chunks
+    chunks = conv_module._answer_chunks(text, words_per_chunk=4)
+    assert len(chunks) == 3
+    assert "".join(chunks) == text
 
 
 def test_blocked_and_unavailable_get_their_own_event_names(

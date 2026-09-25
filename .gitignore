@@ -19,3 +19,7 @@ dist/
 .vscode/
 .DS_Store
 rag_chatbot_plan_development_plan_v3.5.md
+
+# Generated eval reports (app/eval/cli.py --out) -- point-in-time snapshots tied to
+# whatever DB/corpus state produced them, not source; re-run to regenerate.
+eval_reports/

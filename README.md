@@ -75,6 +75,13 @@ pytest -q              # full suite, needs DATABASE_URL
 
 - [`CLAUDE.md`](CLAUDE.md) — architecture, invariants, and conventions for contributors.
 - [`DEMO.md`](DEMO.md) — a step-by-step demo walkthrough.
+- [`docs/api-integration-guide.md`](docs/api-integration-guide.md) — the HTTP/SSE
+  interface reference for the host team: auth, endpoints, SSE event format, error
+  codes, and the outbound Subscription-tool contract the host must implement.
+- [`docs/document-conversion-prompt.md`](docs/document-conversion-prompt.md) — an
+  AI-agent prompt for converting PDF/Word/etc. into the `.md`+front-matter shape
+  `app/ingestion` expects, before ingesting
+  ([tiếng Việt](docs/document-conversion-prompt.vi.md)).
 
 The full Vietnamese design doc (`rag_chatbot_plan_development_plan_v3.5.md`, referenced throughout
 `CLAUDE.md` as "Plan") is intentionally not part of this repo (see `.gitignore`) — ask whoever

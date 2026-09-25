@@ -68,7 +68,7 @@ def test_general_tier_gets_a_validated_answer_from_the_active_version_only(
         user = conn.execute(text("SELECT user_id FROM conversations")).scalar_one()
     assert [c.purpose for c in calls] == ["plan", "grade", "answer"]
     assert all(
-        c.prompt_version == "v1" and c.status == "ok" and c.provider == "fake" for c in calls
+        c.prompt_version == "v2" and c.status == "ok" and c.provider == "fake" for c in calls
     )
     assert turn.graph_status == "answered" and turn.answer and turn.retrieval_attempts == 1
     assert user == "cli"

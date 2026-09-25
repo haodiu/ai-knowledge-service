@@ -39,7 +39,7 @@ def test_model_defaults_are_the_confirmed_pinned_names() -> None:
     assert (s.planner_model, s.grader_model) == ("gemini-3.1-flash-lite",) * 2
     assert s.answer_model == "gemini-3.6-flash"
     assert s.embedding_model == "gemini-embedding-001"
-    assert s.prompt_version == "v1"
+    assert s.prompt_version == "v2"
     assert s.chat_base_url == "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 

@@ -1,0 +1,96 @@
+{
+  "info": {
+    "name": "RAG Chatbot — Nội quy nhân sự demo",
+    "description": "Plan §6/§11.8. Token dán thủ công vào biến `token` (Spring Boot host thật sẽ mint token này; ở đây ta tự mint qua docker exec — xem README trong repo). 3 request chạy theo thứ tự: tạo conversation -> hỏi (SSE) -> mở citation.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "token", "value": "" },
+    { "key": "conversation_id", "value": "" },
+    { "key": "turn_id", "value": "" },
+    { "key": "source_id", "value": "" },
+    { "key": "question", "value": "Nhân viên được nghỉ phép năm bao nhiêu ngày?" }
+  ],
+  "item": [
+    {
+      "name": "1. Create conversation",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": { "raw": "{{base_url}}/v1/conversations", "host": ["{{base_url}}"], "path": ["v1", "conversations"] }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 201) {",
+              "    const body = pm.response.json();",
+              "    pm.collectionVariables.set('conversation_id', body.id);",
+              "    console.log('conversation_id ->', body.id);",
+              "} else {",
+              "    console.log('Create conversation failed:', pm.response.code, pm.response.text());",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Ask a question (SSE)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"{{question}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/conversations/{{conversation_id}}/turns",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "conversations", "{{conversation_id}}", "turns"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const turnId = pm.response.headers.get('X-Turn-Id');",
+              "if (turnId) {",
+              "    pm.collectionVariables.set('turn_id', turnId);",
+              "    console.log('turn_id ->', turnId);",
+              "}",
+              "// Response is text/event-stream: Postman >=10.13 shows a live \"Server Events\" panel;",
+              "// older Postman just buffers and shows the full raw body once the stream ends (~10-16s).",
+              "// Copy a citation's \"source_id\" from the `answer` event's JSON into the `source_id`",
+              "// variable to run request 3."
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Open a citation source (optional)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/v1/turns/{{turn_id}}/sources/{{source_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "turns", "{{turn_id}}", "sources", "{{source_id}}"]
+        }
+      }
+    }
+  ]
+}

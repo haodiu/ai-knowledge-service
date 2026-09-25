@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     grader_model: str = "gemini-3.1-flash-lite"
     answer_model: str = "gemini-3.6-flash"
     embedding_model: str = "gemini-embedding-001"
-    prompt_version: str = "v1"
+    prompt_version: str = "v2"
     # Per-call bound; the whole graph has GRAPH_TIMEOUT_SECONDS=30 (Plan §8.4).
     chat_timeout_seconds: float = Field(default=20.0, gt=0, le=30)
     embedding_timeout_seconds: float = Field(default=15.0, gt=0, le=30)

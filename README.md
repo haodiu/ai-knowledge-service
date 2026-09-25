@@ -74,6 +74,8 @@ pytest -q              # full suite, needs DATABASE_URL
 ## Learn more
 
 - [`CLAUDE.md`](CLAUDE.md) — architecture, invariants, and conventions for contributors.
-- [`rag_chatbot_plan_development_plan_v3.5.md`](rag_chatbot_plan_development_plan_v3.5.md) — the
-  full design doc.
 - [`DEMO.md`](DEMO.md) — a step-by-step demo walkthrough.
+
+The full Vietnamese design doc (`rag_chatbot_plan_development_plan_v3.5.md`, referenced throughout
+`CLAUDE.md` as "Plan") is intentionally not part of this repo (see `.gitignore`) — ask whoever
+maintains it for a copy.

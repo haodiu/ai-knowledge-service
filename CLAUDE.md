@@ -1,10 +1,9 @@
-# CLAUDE.md — RAG Chatbot Service (Payment & Subscription Platform)
+# CLAUDE.md — RAG Chatbot Service
 
 > Project memory for Claude Code. Read this on every task, together with
 > `rag_chatbot_plan_development_plan_v3.5.md` (referenced below as "Plan").
 > Plan section refs like "Mục 9.1" point to that document's own numbering —
 > use them verbatim when citing, don't renumber.
-> This file is in English for tooling; the Plan itself is in Vietnamese.
 
 ## What this is
 
